@@ -42,6 +42,8 @@ User_Analytics/
 ├── requirements.txt
 ├── README.md
 ├── .gitignore
+├── .streamlit/
+│   └── config.toml
 ├── data/
 │   └── .gitkeep
 ├── src/
@@ -60,6 +62,7 @@ User_Analytics/
 │       │   ├── loader.py
 │       │   └── validation.py
 │       └── ui/
+│           ├── upload_state.py
 │           └── pages/
 │               ├── __init__.py
 │               ├── customer_segmentation.py
@@ -75,16 +78,19 @@ User_Analytics/
     ├── test_eda_bivariate.py
     ├── test_kmeans.py
     ├── test_loader.py
+    ├── test_home_upload_state.py
     └── test_pca.py
 ```
 
 ### 主要文件职责
 
 - `app.py`：设置 Streamlit 页面配置、侧栏导航、Home 页面和 CSV 上传，并把已上传 DataFrame 传给各页面。
+- `.streamlit/config.toml`：项目级 Streamlit 配置；当前将单文件上传上限设为 50 MB。
 - `src/user_analytics/`：应用 Python 包，使用 `src` layout；由 setuptools 在 `pyproject.toml` 中配置。
 - `analysis/`：不依赖 Streamlit 的分析逻辑；包括 EDA、数据质量、聚类、PCA、画像和聚类统计检验。
 - `data/`：CSV 读取与基础数据验证。
 - `ui/pages/`：Home 之外的 Streamlit 页面呈现和交互。
+- `src/user_analytics/ui/upload_state.py`：Home 上传数据的 session state 更新、显式清除和新文件替换逻辑。
 - `data/`：本地数据目录；Git 中用 `.gitkeep` 保留目录，`.gitignore` 忽略本地 CSV 和表格数据文件。
 - `tests/`：pytest 单元测试，按数据加载、分析模块和页面辅助逻辑划分。
 - `pyproject.toml`：项目元数据、Python 版本范围、依赖声明和 setuptools 的 `src` package discovery 配置。
@@ -98,10 +104,14 @@ User_Analytics/
 
 - 首页使用 Streamlit file uploader 接收 CSV，Pandas 读取为 DataFrame。
 - 使用 `utf-8-sig` 处理 UTF-8 BOM；首行是否为列名由用户选项控制。无表头时使用 `header=None` 并生成 `Column_1` 等列名。
+- 在 Pandas 解析前使用标准库 `csv.reader` 校验逻辑记录字段数：有表头时以表头字段数为准，无表头时以首条数据记录为准；不一致时拒绝读取，并用 `index_col=False` 防止额外字段被误当作索引。
+- Streamlit 的 `server.maxUploadSize` 和 loader 后端均限制单个文件最大为 50 MB（52,428,800 bytes）。后端优先检查 Streamlit 上传对象的 `size` 元数据，在读取内容前拒绝超限文件，并对实际字节长度再次校验。
 - 空文件、不可解析格式、仅有表头而无数据行等情况由 `CSVLoadError` 和校验结果反馈。
+- 上传文件发生变化时先使旧数据及 Customer Segmentation 缓存失效；用户清除文件时清空数据。页面切换导致 uploader 暂时不在脚本中的 rerun 不会清空有效 DataFrame。
 - 上传后展示前 10 行、行列数、字段名及 Pandas dtype。
-- 主要代码：`app.py`、`src/user_analytics/data/loader.py`、`src/user_analytics/data/validation.py`。
-- 主要测试：`tests/test_loader.py`。
+- **浏览器手工验证（用户本轮报告）：** 正常 CSV 上传、字段数量异常拒绝、页面切换后保留数据、用户主动清除、新文件替换旧文件、无效文件替换后旧数据失效，均已验证。上传 55 MB 文件时，Streamlit 控件拒绝上传并提示 `File must be 50.0MB or smaller.`。这些是用户报告的浏览器结果，并非本轮自动化浏览器测试。
+- 主要代码：`app.py`、`src/user_analytics/ui/upload_state.py`、`src/user_analytics/data/loader.py`、`src/user_analytics/data/validation.py`、`.streamlit/config.toml`。
+- 主要测试：`tests/test_loader.py`、`tests/test_home_upload_state.py`。
 
 ### Data Quality
 
@@ -140,7 +150,7 @@ User_Analytics/
 ## 5. 重要技术设计
 
 - **页面与分析分层：** 页面交互位于 `ui/pages/`，分析函数位于 `analysis/`，CSV 读入和基础校验位于 `data/`。
-- **上传数据状态：** `app.py` 将当前 DataFrame 放入 `st.session_state.uploaded_dataframe`，并传递给各个页面。
+- **上传数据状态：** `app.py` 将当前 DataFrame 放入 `st.session_state.uploaded_dataframe`，并传递给各个页面。`csv_upload` 的 `on_change` 回调代表用户主动更改/清除上传；非 Home 页面卸载 uploader 时不调用清除逻辑。新文件解析前会清掉旧 DataFrame 与 Customer Segmentation 相关缓存，解析失败后不保留旧数据。
 - **聚类结果缓存：** Customer Segmentation 将聚类输出保存在 session state。结果记录数据指纹、选定特征、K 和 random state；页面检查这些值与当前输入一致后才展示。数据更换时清除聚类和评估状态；设置变化时提示重新运行聚类，避免展示过期结果。
 - **评估与可视化缓存：** K 值评估和 PCA 结果分别保存在 session state，并通过数据/字段/参数签名校验。普通 rerun 不会重新拟合 K-means。
 - **统计结果缓存：** Statistical Analysis 结果绑定数据指纹、聚类字段、K、random state 和统计字段；签名不匹配时不展示旧结果。统计检验调用已有聚类标签，不重新训练模型。
@@ -151,10 +161,10 @@ User_Analytics/
 
 ## 6. Git 状态和提交历史
 
-以下信息在新增本文件之前检查：
+以下信息在本轮完成实现后检查：
 
 - **当前分支：** `feature/customer-segmentation`
-- **工作区状态：** 当时 `git status --short --branch` 仅显示当前分支行，工作区干净。创建本文件后，它会作为新文件显示为未跟踪，直至用户决定提交。
+- **工作区状态：** 本轮检查时以下变更均未暂存：修改 `PROJECT_STATUS.md`、`app.py`、`src/user_analytics/data/loader.py`、`tests/test_loader.py`；未跟踪 `.streamlit/config.toml`、`src/user_analytics/ui/upload_state.py`、`tests/test_home_upload_state.py`。没有执行暂存、Commit 或 Push。
 - **本地分支：** `feature/customer-segmentation`、`feature/data-quality`、`feature/eda`、`master`。
 - **远端：** 本次 `git remote -v` 未输出 remote；是否计划配置 GitHub remote 待后续确认。
 
@@ -162,30 +172,31 @@ User_Analytics/
 
 | Hash | Message |
 | --- | --- |
+| `585ed958217b3761ac07e68b3b95114d76a5920a` | Add project development status documentation |
 | `92ae702c7c215da63edb0e8fe9d758cd5e3a4718` | Add cluster statistical analysis |
 | `23d67cff41e9670c409b176fc8bf068d54ab8c47` | Add customer segment profile insights |
 | `48bf879325b84ae5a589904396bd7a16c4619e31` | Add PCA visualization for customer segmentation |
 | `4c98e38411a9b95bbd8148c6605e124625d4be47` | Add customer segmentation page |
-| `471aaa8a5b93bee43fb131d49e4a6590997f0baa` | Complete exploratory data analysis |
 
 ## 7. 测试情况
 
 - **测试框架：** pytest。
-- **最近一次已知全量测试：** 91 passed（最近一次开发任务中报告；本次创建状态文档时未重新运行测试）。
-- **最近一次已知 `git diff --check`：** 通过（最近一次开发任务中报告；本次创建状态文档时未重新运行）。
-- 浏览器端全站回归验证：待执行/待确认。
+- **CSV loader 定向测试：** 14 passed（2026-11-10，本轮重新运行）。
+- **最近一次全量测试：** 106 passed（2026-11-10，本轮重新运行 `.venv\Scripts\python.exe -m pytest -q`）。
+- **最近一次 `git diff --check`：** 通过（2026-11-10，本轮运行；Git 仅提示部分文件工作副本 LF 将规范化为 CRLF，无 whitespace 错误）。
+- **浏览器验证：** CSV Upload 手工场景由用户本轮报告为已通过；其他页面的全站回归仍待验证。
 
 ## 8. 当前开发进度
 
-核心分析流程和 Customer Segmentation 功能已经基本完成，当前准备进入全站回归测试。统计 UI 最近完成了结果表格拆分和数值格式优化；此状态文档的创建不代表浏览器端回归已完成。
+核心分析流程和 Customer Segmentation 功能已经基本完成。CSV 上传模块包含字段数量一致性校验、session state 清除/替换处理和 50 MB 上传限制；定向测试及全量 pytest 均通过。根据用户本轮报告，CSV Upload 浏览器手工验证已完成；其他页面的全站回归尚未完成。
 
 ## 9. 下一步开发计划
 
 按优先级推进：
 
-1. 全站回归测试。
-2. 增加异常数据和边界条件测试。
-3. 修复测试中发现的问题。
+1. 继续 Data Quality、EDA 和 Customer Segmentation 的浏览器全站回归测试。
+2. 补充异常数据和边界条件覆盖。
+3. 修复回归中发现的问题。
 4. 完善 README 和项目文档。
 5. 检查部署配置和依赖（包括确认 SciPy 的直接依赖声明）。
 6. 配置 GitHub remote 并上传 GitHub。
