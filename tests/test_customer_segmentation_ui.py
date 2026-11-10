@@ -3,6 +3,7 @@ from unittest.mock import patch
 import pandas as pd
 
 from user_analytics.ui.pages.customer_segmentation import (
+    build_cluster_profile_tables,
     make_result_payload,
     render,
     result_matches_current,
@@ -71,3 +72,48 @@ def test_result_match_requires_current_metadata_and_pca_inputs():
     )
     old_cached_result = {key: value for key, value in current.items() if key != "features"}
     assert not result_matches_current(old_cached_result, "abc", ["spend", "visits"], 3, 42)
+
+
+def test_profile_tables_generate_profiles_for_mixed_selected_fields():
+    dataframe = pd.DataFrame(
+        {"spend": [10.0, 20.0, 30.0], "tier": ["A", "A", "B"]},
+        index=[5, 8, 13],
+    )
+    labels = pd.Series([0, 0, 1], index=dataframe.index)
+
+    profiles = build_cluster_profile_tables(dataframe, labels, ["spend", "tier"])
+
+    assert not profiles.numeric.empty
+    assert not profiles.categorical.empty
+    assert profiles.numeric.loc[profiles.numeric["Cluster"] == 0, "Mean"].iloc[0] == 15
+    assert profiles.categorical["Proportion"].sum() == 2.0
+
+
+def test_profile_tables_handle_numeric_only_and_categorical_only_selections():
+    dataframe = pd.DataFrame(
+        {"spend": [10.0, 20.0], "tier": ["A", "B"]}, index=[2, 7]
+    )
+    labels = pd.Series([0, 1], index=dataframe.index)
+
+    numeric_only = build_cluster_profile_tables(dataframe, labels, ["spend"])
+    categorical_only = build_cluster_profile_tables(dataframe, labels, ["tier"])
+
+    assert not numeric_only.numeric.empty
+    assert numeric_only.categorical.empty
+    assert categorical_only.numeric.empty
+    assert not categorical_only.categorical.empty
+
+
+def test_stale_or_invalid_result_is_not_eligible_for_profile_display():
+    stale_result = {
+        "dataset_fingerprint": "old-data",
+        "selected_columns": ("spend", "tier"),
+        "n_clusters": 2,
+        "random_state": 42,
+        "features": pd.DataFrame({"spend": [0.0], "tier_A": [1.0]}),
+        "labels": pd.Series([0], index=[1]),
+    }
+
+    assert not result_matches_current(
+        stale_result, "current-data", ["spend", "tier"], 2, 42
+    )

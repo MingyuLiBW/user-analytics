@@ -11,6 +11,7 @@ from user_analytics.analysis.clustering import (
     fit_kmeans,
     prepare_clustering_data,
     prepare_pca_data,
+    summarize_cluster_profiles,
     summarize_clusters,
 )
 
@@ -81,6 +82,40 @@ def make_result_payload(source, selected_columns, n_clusters, random_state):
         "sample_indices": prepared.sample_indices,
         "features": prepared.features.copy(),
     }
+
+
+def build_cluster_profile_tables(dataframe, labels, selected_columns):
+    """Call the analysis-layer profiler for selected original-data fields."""
+    numeric_columns = [
+        column for column in selected_columns
+        if column in dataframe.columns
+        and pd.api.types.is_numeric_dtype(dataframe[column].dtype)
+        and not pd.api.types.is_bool_dtype(dataframe[column].dtype)
+    ]
+    categorical_columns = [
+        column for column in selected_columns
+        if column in dataframe.columns
+        and not pd.api.types.is_numeric_dtype(dataframe[column].dtype)
+        and not pd.api.types.is_datetime64_any_dtype(dataframe[column].dtype)
+    ]
+    return summarize_cluster_profiles(
+        dataframe,
+        labels,
+        numeric_columns=numeric_columns,
+        categorical_columns=categorical_columns,
+    )
+
+
+def _format_numeric_profile(profile):
+    """Format numeric profile values for display while preserving missing values."""
+    formatted = profile.copy()
+    numeric_fields = ["Mean", "Median", "Standard Deviation", "Minimum", "Maximum"]
+    for column in numeric_fields:
+        if column in formatted:
+            formatted[column] = formatted[column].map(
+                lambda value: f"{value:,.3f}" if pd.notna(value) else "—"
+            )
+    return formatted
 
 
 def render_empty_state():
@@ -247,6 +282,75 @@ def render(dataframe):
     st.subheader("Cluster centers (preprocessed feature space)")
     st.dataframe(result["centers"], use_container_width=True)
     st.caption("Cluster IDs are aligned to the original row index. Source records are not changed or removed.")
+
+    st.subheader("Customer Segment Insights")
+    try:
+        profiles = build_cluster_profile_tables(
+            dataframe, result["labels"], result["selected_columns"]
+        )
+    except (ValueError, TypeError, KeyError) as error:
+        st.warning(f"Cluster profiles could not be calculated: {error}")
+    else:
+        numeric_tab, categorical_tab = st.tabs(["Numeric Profile", "Categorical Profile"])
+        with numeric_tab:
+            if profiles.numeric.empty:
+                st.info("No numeric fields were selected for cluster profiling.")
+            else:
+                st.dataframe(
+                    _format_numeric_profile(profiles.numeric),
+                    hide_index=True,
+                    use_container_width=True,
+                )
+                chart_data = profiles.numeric.dropna(subset=["Mean"])
+                if not chart_data.empty:
+                    fig = px.bar(
+                        chart_data,
+                        x="Field",
+                        y="Mean",
+                        color=chart_data["Cluster"].astype(str),
+                        barmode="group",
+                        title="Numeric field means by cluster",
+                        labels={"Field": "Numeric field", "Mean": "Mean (original units)", "color": "Cluster"},
+                        hover_data={
+                            "Cluster": True,
+                            "Field": True,
+                            "Count": True,
+                            "Mean": ":.3f",
+                            "Median": ":.3f",
+                            "Standard Deviation": ":.3f",
+                            "Minimum": ":.3f",
+                            "Maximum": ":.3f",
+                        },
+                    )
+                    st.plotly_chart(fig, use_container_width=True)
+                else:
+                    st.caption("Selected numeric fields contain no non-missing values to compare.")
+        with categorical_tab:
+            if profiles.categorical.empty:
+                st.info("No categorical fields were selected for cluster profiling.")
+            else:
+                categorical_display = profiles.categorical.copy()
+                categorical_display["Proportion"] = categorical_display["Proportion"].map(
+                    lambda value: f"{value:.1%}" if pd.notna(value) else "—"
+                )
+                st.dataframe(categorical_display, hide_index=True, use_container_width=True)
+                chart_data = profiles.categorical.copy()
+                if not chart_data.empty:
+                    chart_data["Cluster"] = chart_data["Cluster"].astype(str)
+                    chart_data["Proportion (%)"] = chart_data["Proportion"] * 100
+                    fig = px.bar(
+                        chart_data,
+                        x="Cluster",
+                        y="Proportion (%)",
+                        color="Category",
+                        facet_col="Field",
+                        barmode="stack",
+                        title="Category composition within each cluster",
+                        labels={"Cluster": "Cluster", "Category": "Category", "Field": "Categorical field"},
+                        hover_data={"Count": True, "Proportion (%)": ":.1f"},
+                    )
+                    fig.update_yaxes(range=[0, 100], title="Within-cluster proportion (%)")
+                    st.plotly_chart(fig, use_container_width=True)
 
     st.subheader("PCA Visualization")
     pca_state_key = "customer_segmentation_pca"

@@ -339,3 +339,121 @@ def prepare_pca_data(features, labels):
         cumulative_explained_variance_ratio=float(explained.sum()),
         model=model,
     )
+
+
+@dataclass(frozen=True)
+class ClusterProfileResult:
+    """Numeric and categorical profiles computed from original source columns."""
+
+    numeric: pd.DataFrame
+    categorical: pd.DataFrame
+
+
+def summarize_cluster_profiles(
+    dataframe,
+    labels,
+    numeric_columns=None,
+    categorical_columns=None,
+):
+    """Summarize original numeric and categorical fields for each cluster.
+
+    A label Series is aligned by index and must cover exactly the DataFrame rows.
+    Non-Series labels are interpreted positionally. Missing values are excluded
+    independently for each field; categorical proportions use each cluster's
+    non-missing count for that field as the denominator.
+    """
+    if dataframe.empty:
+        raise ValueError("Cannot summarize cluster profiles for an empty DataFrame.")
+    if not dataframe.index.is_unique:
+        raise ValueError("DataFrame index must be unique to align cluster labels.")
+
+    if isinstance(labels, pd.Series):
+        if len(labels) != len(dataframe):
+            raise ValueError("Cluster label count must match the number of DataFrame rows.")
+        if not labels.index.is_unique:
+            raise ValueError("Cluster label index must be unique to align with DataFrame rows.")
+        if not labels.index.difference(dataframe.index).empty or not dataframe.index.difference(labels.index).empty:
+            raise ValueError("Cluster label index must match the DataFrame index exactly.")
+        aligned_labels = labels.loc[dataframe.index].copy()
+    else:
+        label_values = list(labels)
+        if len(label_values) != len(dataframe):
+            raise ValueError("Cluster label count must match the number of DataFrame rows.")
+        aligned_labels = pd.Series(label_values, index=dataframe.index.copy(), name="Cluster")
+
+    numeric_candidates = [
+        column for column in dataframe.columns
+        if pd.api.types.is_numeric_dtype(dataframe[column].dtype)
+        and not pd.api.types.is_bool_dtype(dataframe[column].dtype)
+    ]
+    categorical_candidates = [
+        column for column in dataframe.columns
+        if not pd.api.types.is_numeric_dtype(dataframe[column].dtype)
+        and not pd.api.types.is_datetime64_any_dtype(dataframe[column].dtype)
+    ]
+    numeric_fields = numeric_candidates if numeric_columns is None else list(numeric_columns)
+    categorical_fields = categorical_candidates if categorical_columns is None else list(categorical_columns)
+
+    missing_fields = [
+        column for column in numeric_fields + categorical_fields
+        if column not in dataframe.columns
+    ]
+    if missing_fields:
+        raise ValueError(f"Profile field(s) not found: {missing_fields}")
+    invalid_numeric = [column for column in numeric_fields if column not in numeric_candidates]
+    if invalid_numeric:
+        raise ValueError(f"Numeric profile fields must have numeric dtypes: {invalid_numeric}")
+    invalid_categorical = [
+        column for column in categorical_fields if column not in categorical_candidates
+    ]
+    if invalid_categorical:
+        raise ValueError(f"Categorical profile fields must be non-numeric and non-date: {invalid_categorical}")
+    overlap = set(numeric_fields).intersection(categorical_fields)
+    if overlap:
+        raise ValueError(f"Profile fields cannot be both numeric and categorical: {sorted(overlap)}")
+
+    cluster_values = aligned_labels.to_numpy(copy=True)
+    numeric_rows = []
+    for cluster in pd.unique(cluster_values):
+        cluster_mask = aligned_labels.eq(cluster).to_numpy()
+        for column in numeric_fields:
+            values = dataframe.loc[cluster_mask, column].dropna()
+            numeric_rows.append(
+                {
+                    "Cluster": cluster,
+                    "Field": column,
+                    "Count": int(values.count()),
+                    "Mean": values.mean() if not values.empty else float("nan"),
+                    "Median": values.median() if not values.empty else float("nan"),
+                    "Standard Deviation": values.std() if not values.empty else float("nan"),
+                    "Minimum": values.min() if not values.empty else float("nan"),
+                    "Maximum": values.max() if not values.empty else float("nan"),
+                }
+            )
+    numeric_profile = pd.DataFrame(
+        numeric_rows,
+        columns=["Cluster", "Field", "Count", "Mean", "Median", "Standard Deviation", "Minimum", "Maximum"],
+    )
+
+    categorical_rows = []
+    for cluster in pd.unique(cluster_values):
+        cluster_mask = aligned_labels.eq(cluster).to_numpy()
+        for column in categorical_fields:
+            values = dataframe.loc[cluster_mask, column].dropna()
+            denominator = len(values)
+            counts = values.value_counts(dropna=True, sort=False)
+            for category, count in counts.items():
+                categorical_rows.append(
+                    {
+                        "Cluster": cluster,
+                        "Field": column,
+                        "Category": category,
+                        "Count": int(count),
+                        "Proportion": count / denominator if denominator else float("nan"),
+                    }
+                )
+    categorical_profile = pd.DataFrame(
+        categorical_rows,
+        columns=["Cluster", "Field", "Category", "Count", "Proportion"],
+    )
+    return ClusterProfileResult(numeric=numeric_profile, categorical=categorical_profile)
