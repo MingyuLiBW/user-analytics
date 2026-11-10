@@ -8,8 +8,8 @@
 - **项目目标：** 基于 Python 和 Streamlit 构建交互式数据分析 Web 应用。
 - **主要用户流程：** 上传 CSV → 数据质量检查 → EDA → Customer Segmentation。
 - **应用入口：** 根目录 `app.py`。
-- **主要依赖：** Streamlit、Pandas、NumPy、scikit-learn、Plotly；测试使用 pytest。
-- **统计模块依赖情况：** `cluster_statistics.py` 直接导入 `scipy.stats`。SciPy 当前随 scikit-learn 依赖安装并可用，但未在 `pyproject.toml` 或 `requirements.txt` 中作为直接依赖声明。部署前应检查并确定是否需要显式声明。
+- **主要依赖：** Streamlit、Pandas、NumPy、scikit-learn、Plotly、SciPy；测试使用 pytest。
+- **统计模块依赖情况：** `cluster_statistics.py` 直接导入 `scipy.stats`；SciPy 已在 `pyproject.toml` 的运行时依赖中直接声明。
 
 ## 2. 开发环境
 
@@ -22,7 +22,7 @@
 | 虚拟环境解释器 | `.venv\Scripts\python.exe`，版本 Python 3.10.6 |
 | 项目布局 | `src` layout |
 | 项目安装方式 | `pyproject.toml` 配置 setuptools；虚拟环境安装元数据确认是 editable 安装，项目 URL 为本地项目目录 |
-| 依赖安装 | `python -m pip install -r requirements.txt`；开发安装项目时使用 `python -m pip install -e .` |
+| 依赖安装 | 推荐 `python -m pip install -e ".[test]"`；兼容入口为 `python -m pip install -r requirements.txt` |
 | Web 启动命令 | `python -m streamlit run app.py`（先激活 `.venv`） |
 | 默认本地地址 | `http://localhost:8501`；这是 Streamlit 默认地址，本次未检查正在运行的服务。端口被占用时 Streamlit 可能选用其他端口 |
 | 测试命令 | `python -m pytest -q` |
@@ -94,7 +94,7 @@ User_Analytics/
 - `data/`：本地数据目录；Git 中用 `.gitkeep` 保留目录，`.gitignore` 忽略本地 CSV 和表格数据文件。
 - `tests/`：pytest 单元测试，按数据加载、分析模块和页面辅助逻辑划分。
 - `pyproject.toml`：项目元数据、Python 版本范围、依赖声明和 setuptools 的 `src` package discovery 配置。
-- `requirements.txt`：开发环境依赖安装清单，含应用依赖和 pytest。
+- `requirements.txt`：兼容安装入口，引用 `pyproject.toml` 项目及 `test` extra；依赖只在 `pyproject.toml` 维护。
 
 ## 4. 已完成功能
 
@@ -112,6 +112,15 @@ User_Analytics/
 - **浏览器手工验证（用户本轮报告）：** 正常 CSV 上传、字段数量异常拒绝、页面切换后保留数据、用户主动清除、新文件替换旧文件、无效文件替换后旧数据失效，均已验证。上传 55 MB 文件时，Streamlit 控件拒绝上传并提示 `File must be 50.0MB or smaller.`。这些是用户报告的浏览器结果，并非本轮自动化浏览器测试。
 - 主要代码：`app.py`、`src/user_analytics/ui/upload_state.py`、`src/user_analytics/data/loader.py`、`src/user_analytics/data/validation.py`、`.streamlit/config.toml`。
 - 主要测试：`tests/test_loader.py`、`tests/test_home_upload_state.py`。
+
+#### Cross-page Integration Regression
+
+- **User-reported browser verification（用户手动浏览器回归，本轮报告）：** 以数据集 A 完成 K-means、PCA、Cluster Profile 和 Statistical Analysis 后，连续执行 A → B → C 替换，所有检查均通过。
+- Home 预览、字段和行列数，以及 Data Quality、EDA 的分析数据均与当前上传的数据集一致。
+- 替换数据集后，旧 K-means 聚类结果、PCA 坐标、Cluster Profile 和 Statistical Analysis 结果不再显示。
+- A、B、C 存在部分同名字段时，特征选择和统计字段选择控件状态正常，未发现不适用的旧字段残留。
+- 在 C 已加载时上传 `invalid_mismatched_columns.csv`，文件被拒绝，旧数据和旧分析结果均未继续显示。
+- 上述内容是用户报告的手动浏览器验证，不是 Codex 自动执行的浏览器测试，也不计入 pytest 通过数量。
 
 ### Data Quality
 
@@ -161,10 +170,10 @@ User_Analytics/
 
 ## 6. Git 状态和提交历史
 
-以下信息在本轮完成实现后检查：
+以下信息在记录 `e51c18f` 提交后核对：
 
 - **当前分支：** `feature/customer-segmentation`
-- **工作区状态：** 本轮检查时以下变更均未暂存：修改 `PROJECT_STATUS.md`、`app.py`、`src/user_analytics/data/loader.py`、`tests/test_loader.py`；未跟踪 `.streamlit/config.toml`、`src/user_analytics/ui/upload_state.py`、`tests/test_home_upload_state.py`。没有执行暂存、Commit 或 Push。
+- **工作区状态：** 本轮更新本文档前，`git status` 显示工作区干净。本文档修改后会成为唯一的未提交修改；本轮没有修改代码或 Git 历史。
 - **本地分支：** `feature/customer-segmentation`、`feature/data-quality`、`feature/eda`、`master`。
 - **远端：** 本次 `git remote -v` 未输出 remote；是否计划配置 GitHub remote 待后续确认。
 
@@ -172,36 +181,36 @@ User_Analytics/
 
 | Hash | Message |
 | --- | --- |
+| `e51c18feebb925fc3aeaff668e1e9062f5d72a4c` | Improve CSV upload reliability and validation |
 | `585ed958217b3761ac07e68b3b95114d76a5920a` | Add project development status documentation |
 | `92ae702c7c215da63edb0e8fe9d758cd5e3a4718` | Add cluster statistical analysis |
 | `23d67cff41e9670c409b176fc8bf068d54ab8c47` | Add customer segment profile insights |
 | `48bf879325b84ae5a589904396bd7a16c4619e31` | Add PCA visualization for customer segmentation |
-| `4c98e38411a9b95bbd8148c6605e124625d4be47` | Add customer segmentation page |
 
 ## 7. 测试情况
 
 - **测试框架：** pytest。
 - **CSV loader 定向测试：** 14 passed（2026-11-10，本轮重新运行）。
-- **最近一次全量测试：** 106 passed（2026-11-10，本轮重新运行 `.venv\Scripts\python.exe -m pytest -q`）。
+- **项目 `.venv` 全量测试记录：** 106 passed（2026-11-10，先前运行 `.venv\Scripts\python.exe -m pytest -q`）。
+- **上传状态与 Customer Segmentation UI 定向测试：** 17 passed（2026-11-10，先前只读审查期间运行 `tests/test_home_upload_state.py` 与 `tests/test_customer_segmentation_ui.py` 得到；不是本轮跨页面浏览器测试结果）。
 - **最近一次 `git diff --check`：** 通过（2026-11-10，本轮运行；Git 仅提示部分文件工作副本 LF 将规范化为 CRLF，无 whitespace 错误）。
-- **浏览器验证：** CSV Upload 手工场景由用户本轮报告为已通过；其他页面的全站回归仍待验证。
+- **依赖管理临时环境验证（Codex 自动执行）：** 在项目目录外的 `C:\AI_Projects\_ua_dependency_check_20261110` 使用 Python 3.10.6 创建全新虚拟环境；`python -m pip install -e ".[test]"` 和 `python -m pip install -r requirements.txt` 均成功；`python -m pip check` 输出 `No broken requirements found.`；`user_analytics`、`scipy`、`streamlit`、`pandas`、`numpy`、`sklearn`、`plotly` 导入检查成功；`python -m pytest -q` 为 106 passed；`python -m streamlit run app.py` 成功启动于端口 8502，验证后已停止。项目原有 `.venv` 未被修改。
+- **自动化与手动验证区分：** CSV loader 14 passed、上传状态与 Customer Segmentation UI 17 passed 为此前 pytest 自动化记录；全量 106 passed 既有项目 `.venv` 记录，也在本轮临时环境中重新验证。Cross-page Integration Regression 为用户报告的手动浏览器验证，不是自动化测试结果。临时环境安装与启动验证也不代表跨页面浏览器测试。
 
 ## 8. 当前开发进度
 
-核心分析流程和 Customer Segmentation 功能已经基本完成。CSV 上传模块包含字段数量一致性校验、session state 清除/替换处理和 50 MB 上传限制；定向测试及全量 pytest 均通过。根据用户本轮报告，CSV Upload 浏览器手工验证已完成；其他页面的全站回归尚未完成。
+核心功能开发、CSV 上传可靠性改进和跨页面手动浏览器回归均已完成。CSV Upload 阶段记录在提交 `e51c18f`（Improve CSV upload reliability and validation）中，包含字段数量一致性校验、session state 清除/替换处理和 50 MB 上传限制。A → B → C 数据替换及 Data Quality、EDA、Customer Segmentation 跨页面一致性由用户报告验证通过。本轮完成依赖声明和安装文档修正，并在项目目录外的全新 Python 3.10 环境验证两种安装入口、依赖一致性、模块导入、全量 pytest 和 Streamlit 启动；项目原有 `.venv` 未修改。该依赖验证不属于新的跨页面浏览器回归。
 
 ## 9. 下一步开发计划
 
-按优先级推进：
+按优先级推进工程化收尾：
 
-1. 继续 Data Quality、EDA 和 Customer Segmentation 的浏览器全站回归测试。
-2. 补充异常数据和边界条件覆盖。
-3. 修复回归中发现的问题。
-4. 完善 README 和项目文档。
-5. 检查部署配置和依赖（包括确认 SciPy 的直接依赖声明）。
-6. 配置 GitHub remote 并上传 GitHub。
-7. 部署 Streamlit Community Cloud。
-8. 浏览器验证线上应用。
+1. 继续完善 README 和项目文档，使其与当前功能、配置及验证状态一致。
+2. 检查部署配置；SciPy 直接依赖及 pytest 测试 extra 已在 `pyproject.toml` 声明并通过全新环境安装验证。
+3. 补充必要的异常数据和边界条件测试，并修复检查中发现的问题。
+4. 准备部署所需配置；配置 GitHub remote 并上传 GitHub（待用户确认后执行）。
+5. 部署 Streamlit Community Cloud。
+6. 浏览器验证线上应用。
 
 ## 10. 开发约定
 

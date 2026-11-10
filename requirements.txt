@@ -1,6 +1,2 @@
-streamlit
-pandas
-numpy
-scikit-learn
-plotly
-pytest
+# Compatibility install entry point; run from the project root.
+-e .[test]
