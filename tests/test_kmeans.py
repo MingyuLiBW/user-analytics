@@ -54,6 +54,63 @@ def test_cluster_summary_has_correct_counts_proportions_and_source_means():
     assert summary.loc[summary["x"].idxmax(), "x"] > 9
 
 
+def test_cluster_summary_accepts_exact_series_index_match():
+    source = pd.DataFrame({"value": [1.0, 3.0, 10.0, 12.0]}, index=[10, 20, 30, 40])
+    labels = pd.Series([0, 0, 1, 1], index=source.index, name="Cluster")
+
+    summary = summarize_clusters(source, labels, numeric_columns=["value"])
+
+    assert summary["Sample Count"].to_dict() == {0: 2, 1: 2}
+    assert summary["Sample Proportion"].to_dict() == {0: 0.5, 1: 0.5}
+    assert summary["value"].to_dict() == {0: 2.0, 1: 11.0}
+
+
+def test_cluster_summary_reorders_series_labels_by_matching_index():
+    source = pd.DataFrame({"value": [1.0, 3.0, 10.0, 12.0]}, index=[10, 20, 30, 40])
+    labels = pd.Series([1, 0, 1, 0], index=[30, 10, 40, 20], name="Cluster")
+
+    summary = summarize_clusters(source, labels, numeric_columns=["value"])
+
+    assert summary["Sample Count"].to_dict() == {0: 2, 1: 2}
+    assert summary["value"].to_dict() == {0: 2.0, 1: 11.0}
+
+
+@pytest.mark.parametrize(
+    "label_index",
+    ([10, 20, 30], [10, 20, 30, 40, 50]),
+    ids=["missing-index", "extra-index"],
+)
+def test_cluster_summary_rejects_incomplete_or_extra_series_indices(label_index):
+    source = pd.DataFrame({"value": [1.0, 3.0, 10.0, 12.0]}, index=[10, 20, 30, 40])
+    labels = pd.Series(range(len(label_index)), index=label_index)
+
+    with pytest.raises(ValueError, match="match.*index exactly"):
+        summarize_clusters(source, labels)
+
+
+def test_cluster_summary_rejects_duplicate_dataframe_index():
+    source = pd.DataFrame({"value": [1.0, 3.0, 10.0]}, index=[10, 10, 30])
+    labels = pd.Series([0, 0, 1], index=[10, 10, 30])
+
+    with pytest.raises(ValueError, match="DataFrame index must be unique"):
+        summarize_clusters(source, labels)
+
+
+def test_cluster_summary_rejects_duplicate_series_index():
+    source = pd.DataFrame({"value": [1.0, 3.0, 10.0]}, index=[10, 20, 30])
+    labels = pd.Series([0, 0, 1], index=[10, 10, 30])
+
+    with pytest.raises(ValueError, match="label index must be unique"):
+        summarize_clusters(source, labels)
+
+
+def test_cluster_summary_rejects_array_labels_with_wrong_length():
+    source = pd.DataFrame({"value": [1.0, 3.0, 10.0, 12.0]}, index=[10, 20, 30, 40])
+
+    with pytest.raises(ValueError, match="label count must match"):
+        summarize_clusters(source, [0, 0, 1])
+
+
 def test_evaluate_kmeans_returns_elbow_and_silhouette_values():
     _, prepared = make_features()
 

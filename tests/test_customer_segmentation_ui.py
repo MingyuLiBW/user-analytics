@@ -1,7 +1,13 @@
 from unittest.mock import patch
+from types import SimpleNamespace
 
 import pandas as pd
+import pytest
+from sklearn.cluster import KMeans
+from sklearn.metrics import silhouette_score
 
+from user_analytics.analysis import clustering
+from user_analytics.analysis.clustering import fit_kmeans, prepare_clustering_data
 from user_analytics.ui.pages.customer_segmentation import (
     build_cluster_statistics_tables,
     build_cluster_profile_tables,
@@ -47,12 +53,96 @@ def test_result_payload_surfaces_silhouette_unavailable_without_losing_fit():
     )
 
     with patch(
-        "user_analytics.ui.pages.customer_segmentation.evaluate_kmeans",
+        "user_analytics.ui.pages.customer_segmentation.silhouette_score",
         side_effect=ValueError("Silhouette is undefined for this result."),
     ):
         payload = make_result_payload(dataframe, ["a", "b"], n_clusters=2, random_state=1)
 
     assert payload["labels"].index.tolist() == dataframe.index.tolist()
+    assert payload["inertia"] >= 0
+    assert payload["silhouette"] is None
+    assert "undefined" in payload["silhouette_note"]
+
+
+def test_payload_silhouette_uses_fitted_labels_and_preprocessed_features():
+    dataframe = pd.DataFrame(
+        {"a": [0.0, 0.2, 0.8, 5.0, 5.2, 5.8], "b": [0.0, 0.1, 1.0, 5.0, 5.1, 6.0]},
+        index=[10, 20, 30, 40, 50, 60],
+    )
+    prepared = prepare_clustering_data(dataframe, ["a", "b"])
+
+    with patch("user_analytics.ui.pages.customer_segmentation.evaluate_kmeans") as evaluate:
+        payload = make_result_payload(dataframe, ["a", "b"], n_clusters=2, random_state=7)
+
+    expected = silhouette_score(prepared.features.to_numpy(), payload["labels"].to_numpy())
+    assert payload["silhouette"] == pytest.approx(expected)
+    evaluate.assert_not_called()
+
+
+def test_payload_preserves_existing_kmeans_labels_centers_and_inertia():
+    dataframe = pd.DataFrame(
+        {"a": [0.0, 0.2, 0.8, 5.0, 5.2, 5.8], "b": [0.0, 0.1, 1.0, 5.0, 5.1, 6.0]},
+        index=[10, 20, 30, 40, 50, 60],
+    )
+    prepared = prepare_clustering_data(dataframe, ["a", "b"])
+    expected_fit = fit_kmeans(prepared, n_clusters=2, random_state=7)
+
+    payload = make_result_payload(dataframe, ["a", "b"], n_clusters=2, random_state=7)
+
+    pd.testing.assert_series_equal(payload["labels"], expected_fit.labels)
+    pd.testing.assert_frame_equal(payload["centers"], expected_fit.centers)
+    assert payload["inertia"] == pytest.approx(expected_fit.inertia)
+
+
+def test_current_k_clustering_fits_kmeans_once(monkeypatch):
+    dataframe = pd.DataFrame(
+        {"a": [0.0, 0.2, 0.8, 5.0, 5.2, 5.8], "b": [0.0, 0.1, 1.0, 5.0, 5.1, 6.0]}
+    )
+
+    class CountingKMeans(KMeans):
+        fit_calls = 0
+
+        def fit(self, X, y=None, sample_weight=None):
+            type(self).fit_calls += 1
+            return super().fit(X, y=y, sample_weight=sample_weight)
+
+    monkeypatch.setattr(clustering, "KMeans", CountingKMeans)
+    payload = make_result_payload(dataframe, ["a", "b"], n_clusters=2, random_state=7)
+
+    assert CountingKMeans.fit_calls == 1
+    assert payload["silhouette"] is not None
+
+
+def test_collapsed_fitted_clusters_make_silhouette_unavailable_without_scoring():
+    dataframe = pd.DataFrame({"a": [0.0, 1.0, 2.0], "b": [2.0, 1.0, 0.0]}, index=[4, 5, 6])
+    fitted = SimpleNamespace(
+        labels=pd.Series([0, 0, 0], index=dataframe.index, name="Cluster"),
+        centers=pd.DataFrame(),
+        inertia=1.0,
+    )
+
+    with patch("user_analytics.ui.pages.customer_segmentation.fit_kmeans", return_value=fitted), patch(
+        "user_analytics.ui.pages.customer_segmentation.silhouette_score"
+    ) as scorer:
+        payload = make_result_payload(dataframe, ["a", "b"], n_clusters=2, random_state=7)
+
+    assert payload["silhouette"] is None
+    assert "distinct fitted clusters" in payload["silhouette_note"]
+    scorer.assert_not_called()
+
+
+def test_silhouette_calculation_failure_keeps_fitted_cluster_result():
+    dataframe = pd.DataFrame(
+        {"a": [0.0, 0.2, 0.8, 5.0, 5.2, 5.8], "b": [0.0, 0.1, 1.0, 5.0, 5.1, 6.0]}
+    )
+
+    with patch(
+        "user_analytics.ui.pages.customer_segmentation.silhouette_score",
+        side_effect=ValueError("Silhouette is undefined for these labels."),
+    ):
+        payload = make_result_payload(dataframe, ["a", "b"], n_clusters=2, random_state=7)
+
+    assert len(payload["labels"]) == len(dataframe)
     assert payload["inertia"] >= 0
     assert payload["silhouette"] is None
     assert "undefined" in payload["silhouette_note"]

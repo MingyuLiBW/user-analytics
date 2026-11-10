@@ -1,5 +1,6 @@
 """Descriptive and univariate analysis helpers."""
 
+import numpy as np
 import pandas as pd
 
 
@@ -31,7 +32,8 @@ def describe_numeric(dataframe, columns=None):
         and (column in numeric_columns or dataframe[column].isna().all())
     ]
     statistic_names = [
-        "Count", "Mean", "Standard Deviation", "Minimum", "25%", "Median", "75%", "Maximum"
+        "Count", "Missing Count", "Non-finite Count", "Mean", "Standard Deviation",
+        "Minimum", "25%", "Median", "75%", "Maximum"
     ]
     if not selected:
         return pd.DataFrame(columns=statistic_names)
@@ -39,18 +41,24 @@ def describe_numeric(dataframe, columns=None):
     rows = {}
     for column in selected:
         series = dataframe[column]
-        if series.isna().all():
-            rows[column] = [0, float("nan"), float("nan"), float("nan"), float("nan"),
-                            float("nan"), float("nan"), float("nan")]
-        elif column not in numeric_columns:
+        if column not in numeric_columns and not series.isna().all():
             continue
-        else:
-            description = series.describe()
-            rows[column] = [
-                description["count"], description["mean"], description["std"],
-                description["min"], description["25%"], description["50%"],
-                description["75%"], description["max"],
-            ]
+        numeric_values = pd.to_numeric(series, errors="coerce")
+        values_array = numeric_values.to_numpy(dtype=float, na_value=np.nan)
+        finite_values = values_array[np.isfinite(values_array)]
+        missing_count = int(series.isna().sum())
+        non_finite_count = int((series.notna().to_numpy() & ~np.isfinite(values_array)).sum())
+        description = pd.Series(finite_values, dtype="float64").describe() if finite_values.size else None
+        rows[column] = [
+            int(finite_values.size), missing_count, non_finite_count,
+            description["mean"] if description is not None else float("nan"),
+            description["std"] if description is not None else float("nan"),
+            description["min"] if description is not None else float("nan"),
+            description["25%"] if description is not None else float("nan"),
+            description["50%"] if description is not None else float("nan"),
+            description["75%"] if description is not None else float("nan"),
+            description["max"] if description is not None else float("nan"),
+        ]
     result = pd.DataFrame.from_dict(rows, orient="index", columns=statistic_names)
     result.index.name = "Field"
     return result
@@ -84,7 +92,10 @@ def prepare_numeric_series(dataframe, column):
     """Return a copy of valid numeric observations for univariate charts."""
     if column not in get_numeric_columns(dataframe):
         raise ValueError(f"'{column}' is not a numeric field.")
-    return dataframe[column].dropna().copy()
+    series = dataframe[column]
+    numeric_values = pd.to_numeric(series, errors="coerce")
+    values_array = numeric_values.to_numpy(dtype=float, na_value=np.nan)
+    return numeric_values.iloc[np.isfinite(values_array)].copy()
 
 
 def prepare_category_frequencies(dataframe, column, top_n=None):
@@ -97,8 +108,16 @@ def prepare_category_frequencies(dataframe, column, top_n=None):
     if top_n is not None and top_n > 0 and len(counts) > top_n:
         top_counts = counts.iloc[:top_n]
         other_count = int(counts.iloc[top_n:].sum())
+        has_real_other = "Other" in counts.index
         counts = top_counts.copy()
-        counts.loc["Other"] = other_count
+        other_label = "Other"
+        if has_real_other:
+            other_label = "Other (remaining)"
+            suffix = 2
+            while other_label in counts.index or other_label in values.unique():
+                other_label = f"Other (remaining) {suffix}"
+                suffix += 1
+        counts.loc[other_label] = other_count
 
     denominator = int(values.size)
     result = pd.DataFrame({"Category": counts.index, "Count": counts.to_numpy()})
@@ -113,7 +132,15 @@ def prepare_bivariate_data(dataframe, x_column, y_column):
         raise ValueError("Choose different fields for X and Y.")
     if x_column not in dataframe.columns or y_column not in dataframe.columns:
         raise ValueError("Choose fields that exist in the dataset.")
-    return dataframe[[x_column, y_column]].dropna().copy()
+    result = dataframe[[x_column, y_column]].dropna().copy()
+    numeric_columns = [
+        column for column in (x_column, y_column)
+        if pd.api.types.is_numeric_dtype(dataframe[column].dtype)
+    ]
+    for column in numeric_columns:
+        values = pd.to_numeric(result[column], errors="coerce").to_numpy(dtype=float, na_value=np.nan)
+        result = result.loc[np.isfinite(values)]
+    return result
 
 
 def prepare_categorical_numeric_data(dataframe, category_column, numeric_column):
@@ -124,7 +151,9 @@ def prepare_categorical_numeric_data(dataframe, category_column, numeric_column)
         raise ValueError(f"'{category_column}' is not a categorical field.")
     if numeric_column not in get_numeric_columns(dataframe):
         raise ValueError(f"'{numeric_column}' is not a numeric field.")
-    return dataframe[[category_column, numeric_column]].dropna().copy()
+    result = dataframe[[category_column, numeric_column]].dropna().copy()
+    values = pd.to_numeric(result[numeric_column], errors="coerce").to_numpy(dtype=float, na_value=np.nan)
+    return result.loc[np.isfinite(values)].copy()
 
 
 def prepare_categorical_crosstab(dataframe, x_column, y_column, normalize=False):
@@ -148,4 +177,8 @@ def calculate_correlation(dataframe, columns=None, method="pearson"):
     ]
     if not selected:
         return pd.DataFrame()
-    return dataframe[selected].corr(method=method, min_periods=1)
+    numeric_data = dataframe[selected].copy()
+    for column in selected:
+        values = pd.to_numeric(numeric_data[column], errors="coerce").to_numpy(dtype=float, na_value=np.nan)
+        numeric_data.loc[~np.isfinite(values), column] = np.nan
+    return numeric_data.corr(method=method, min_periods=1)

@@ -3,6 +3,7 @@
 from dataclasses import dataclass
 from typing import Any
 
+import numpy as np
 import pandas as pd
 from sklearn.cluster import KMeans
 from sklearn.compose import ColumnTransformer
@@ -73,6 +74,18 @@ def prepare_clustering_data(dataframe, selected_columns):
         raise ValueError("One or more selected fields have unsupported data types.")
     if dataframe.empty:
         raise ValueError("There are no rows available for clustering.")
+
+    for column in numeric_columns:
+        values = pd.to_numeric(dataframe[column], errors="coerce").to_numpy(
+            dtype=float, na_value=np.nan
+        )
+        non_finite_mask = dataframe[column].notna().to_numpy() & ~np.isfinite(values)
+        non_finite_count = int(non_finite_mask.sum())
+        if non_finite_count:
+            raise ValueError(
+                f"Numeric field '{column}' contains {non_finite_count} non-finite value(s) "
+                "(+inf or -inf); correct them before clustering."
+            )
 
     numeric_pipeline = Pipeline(
         steps=[
@@ -162,7 +175,6 @@ def _validate_kmeans_input(features, n_clusters):
     if any(not pd.api.types.is_numeric_dtype(dtype) for dtype in matrix.dtypes):
         raise ValueError("K-means features must all be numeric.")
     values = matrix.to_numpy(dtype=float)
-    import numpy as np
     if not np.isfinite(values).all():
         raise ValueError("K-means features must not contain missing or infinite values.")
     sample_count = len(matrix)
@@ -198,14 +210,27 @@ def fit_kmeans(features, n_clusters, random_state=42):
 
 def summarize_clusters(original_dataframe, labels, numeric_columns=None):
     """Summarize cluster sizes, proportions, and means of source numeric fields."""
-    if not isinstance(labels, pd.Series):
-        labels = pd.Series(labels, index=original_dataframe.index, name="Cluster")
-    if not labels.index.is_unique or not original_dataframe.index.is_unique:
-        raise ValueError("Cluster labels and source rows must have unique indices for alignment.")
-    common_index = original_dataframe.index.intersection(labels.index, sort=False)
-    if common_index.empty:
+    if not original_dataframe.index.is_unique:
+        raise ValueError("Original DataFrame index must be unique for cluster label alignment.")
+
+    if isinstance(labels, pd.Series):
+        if not labels.index.is_unique:
+            raise ValueError("Cluster label index must be unique for alignment.")
+        if (
+            len(labels) != len(original_dataframe)
+            or not labels.index.difference(original_dataframe.index).empty
+            or not original_dataframe.index.difference(labels.index).empty
+        ):
+            raise ValueError("Cluster label index must match the original DataFrame index exactly.")
+        aligned_labels = labels.loc[original_dataframe.index].copy()
+    else:
+        label_values = list(labels)
+        if len(label_values) != len(original_dataframe):
+            raise ValueError("Cluster label count must match the number of original DataFrame rows.")
+        aligned_labels = pd.Series(label_values, index=original_dataframe.index, name="Cluster")
+
+    if original_dataframe.empty:
         raise ValueError("No cluster labels match the original data index.")
-    aligned_labels = labels.loc[common_index]
     numeric_candidates = [
         column for column in original_dataframe.columns
         if pd.api.types.is_numeric_dtype(original_dataframe[column].dtype)
@@ -216,7 +241,7 @@ def summarize_clusters(original_dataframe, labels, numeric_columns=None):
     if invalid_numeric:
         raise ValueError(f"Selected profile field(s) are not numeric: {invalid_numeric}")
 
-    summary = pd.DataFrame({"Cluster": aligned_labels.to_numpy()}, index=common_index)
+    summary = pd.DataFrame({"Cluster": aligned_labels.to_numpy()}, index=original_dataframe.index)
     summary_counts = summary["Cluster"].value_counts().sort_index()
     proportions = summary_counts / len(summary)
     result = pd.DataFrame(
@@ -226,7 +251,7 @@ def summarize_clusters(original_dataframe, labels, numeric_columns=None):
         }
     )
     if selected_numeric:
-        source_values = original_dataframe.loc[common_index, selected_numeric].copy()
+        source_values = original_dataframe.loc[original_dataframe.index, selected_numeric].copy()
         means = source_values.groupby(aligned_labels, sort=True).mean()
         means.index.name = "Cluster"
         result = result.join(means)
@@ -313,8 +338,6 @@ def prepare_pca_data(features, labels):
     if len(label_values) != len(matrix):
         raise ValueError("Cluster label count must match the number of feature rows.")
 
-    import numpy as np
-
     values = matrix.to_numpy(dtype=float, copy=True)
     if not np.isfinite(values).all():
         raise ValueError("PCA input features must not contain missing or infinite values.")
@@ -358,9 +381,10 @@ def summarize_cluster_profiles(
     """Summarize original numeric and categorical fields for each cluster.
 
     A label Series is aligned by index and must cover exactly the DataFrame rows.
-    Non-Series labels are interpreted positionally. Missing values are excluded
-    independently for each field; categorical proportions use each cluster's
-    non-missing count for that field as the denominator.
+    Non-Series labels are interpreted positionally. Numeric summaries use
+    finite observations only and report missing and non-finite counts separately.
+    Categorical proportions use each cluster's non-missing count for that field
+    as the denominator; categorical handling is otherwise unchanged.
     """
     if dataframe.empty:
         raise ValueError("Cannot summarize cluster profiles for an empty DataFrame.")
@@ -417,12 +441,20 @@ def summarize_cluster_profiles(
     for cluster in pd.unique(cluster_values):
         cluster_mask = aligned_labels.eq(cluster).to_numpy()
         for column in numeric_fields:
-            values = dataframe.loc[cluster_mask, column].dropna()
+            source_values = dataframe.loc[cluster_mask, column]
+            numeric_values = pd.to_numeric(source_values, errors="coerce")
+            numeric_array = numeric_values.to_numpy(dtype=float, na_value=np.nan)
+            finite_mask = np.isfinite(numeric_array)
+            values = numeric_values.iloc[finite_mask]
+            missing_count = int(source_values.isna().sum())
+            non_finite_count = int((source_values.notna().to_numpy() & ~finite_mask).sum())
             numeric_rows.append(
                 {
                     "Cluster": cluster,
                     "Field": column,
                     "Count": int(values.count()),
+                    "missing_count": missing_count,
+                    "non_finite_count": non_finite_count,
                     "Mean": values.mean() if not values.empty else float("nan"),
                     "Median": values.median() if not values.empty else float("nan"),
                     "Standard Deviation": values.std() if not values.empty else float("nan"),
@@ -432,7 +464,10 @@ def summarize_cluster_profiles(
             )
     numeric_profile = pd.DataFrame(
         numeric_rows,
-        columns=["Cluster", "Field", "Count", "Mean", "Median", "Standard Deviation", "Minimum", "Maximum"],
+        columns=[
+            "Cluster", "Field", "Count", "missing_count", "non_finite_count",
+            "Mean", "Median", "Standard Deviation", "Minimum", "Maximum",
+        ],
     )
 
     categorical_rows = []

@@ -331,8 +331,8 @@ def test_chi_square_warning_above_twenty_percent_and_expected_five_boundary():
 
 
 def test_nonfinite_numeric_observations_are_excluded_and_reported():
-    dataframe = pd.DataFrame({"x": [1.0, 2.0, np.inf, -np.inf, 4.0, 5.0]})
-    row = compare_numeric_clusters(dataframe, [0, 0, 0, 1, 1, 1], ["x"]).iloc[0]
+    dataframe = pd.DataFrame({"x": [1.0, 2.0, np.inf, -np.inf, 4.0, 5.0, np.nan]})
+    row = compare_numeric_clusters(dataframe, [0, 0, 0, 1, 1, 1, 0], ["x"]).iloc[0]
 
     assert row["Sample Count"] == 4
     assert row["Non-finite Count"] == 2

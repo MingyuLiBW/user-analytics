@@ -51,6 +51,10 @@ def render(dataframe):
         st.info("No numeric fields are available for IQR outlier analysis.")
     else:
         st.caption("These are statistical flags only; source rows are not changed or removed.")
+        st.caption(
+            "IQR bounds and outlier percentages use finite numeric values only. "
+            "Missing Count and Non-finite Count report NaN and ±inf separately."
+        )
         st.dataframe(outliers, hide_index=True, use_container_width=True)
         chart_data = outliers[outliers["status"] == "Analyzed"]
         if not chart_data.empty:

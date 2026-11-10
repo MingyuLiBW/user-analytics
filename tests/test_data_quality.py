@@ -79,3 +79,44 @@ def test_zero_iqr_is_skipped_and_input_is_unchanged():
     assert result["outlier_count"] == 0
     assert result["status"] == "IQR is zero; outlier detection skipped"
     pd.testing.assert_frame_equal(dataframe, original)
+
+
+def test_iqr_uses_finite_values_and_reports_missing_and_non_finite_counts():
+    dataframe = pd.DataFrame({"score": [1.0, 2.0, 3.0, 100.0, None, float("inf"), -float("inf")]})
+    original = dataframe.copy(deep=True)
+
+    result = analyze_outliers(dataframe).iloc[0]
+
+    assert result["valid_values"] == 4
+    assert result["missing_count"] == 1
+    assert result["non_finite_count"] == 2
+    assert result["lower_bound"] == pytest.approx(-36.5)
+    assert result["upper_bound"] == pytest.approx(65.5)
+    assert result["outlier_count"] == 1
+    assert result["outlier_percentage"] == pytest.approx(25)
+    assert result["status"] == "Analyzed"
+    pd.testing.assert_frame_equal(dataframe, original)
+
+
+def test_iqr_reports_unavailable_when_no_finite_or_too_few_values():
+    dataframe = pd.DataFrame({
+        "none_finite": [None, float("inf"), -float("inf")],
+        "one_finite": [1.0, None, float("inf")],
+        "all_missing": [float("nan")] * 3,
+    })
+
+    result = analyze_outliers(dataframe).set_index("column")
+
+    assert result.loc["none_finite", "status"] == "No finite numeric values"
+    assert result.loc["none_finite", "valid_values"] == 0
+    assert pd.isna(result.loc["none_finite", "lower_bound"])
+    assert pd.isna(result.loc["none_finite", "outlier_percentage"])
+    assert result.loc["one_finite", "status"] == "Insufficient finite numeric values"
+    assert result.loc["one_finite", "valid_values"] == 1
+    assert pd.isna(result.loc["one_finite", "outlier_count"])
+    assert result.loc["all_missing", "status"] == "No finite numeric values"
+    assert result.loc["all_missing", "missing_count"] == 3
+    assert result.loc["all_missing", "non_finite_count"] == 0
+    assert (result["valid_values"] + result["missing_count"] + result["non_finite_count"]).eq(
+        len(dataframe)
+    ).all()

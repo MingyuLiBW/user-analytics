@@ -1,5 +1,6 @@
 """Exploratory data analysis page."""
 
+import numpy as np
 import plotly.express as px
 import streamlit as st
 
@@ -15,6 +16,45 @@ from user_analytics.analysis.eda import (
     prepare_categorical_crosstab,
     prepare_categorical_numeric_data,
 )
+
+
+def _build_numeric_scatter(pair_data, x_column, y_column, color_column, add_trendline):
+    """Build a numeric scatter plot, gracefully omitting an unusable OLS line."""
+    use_trendline = add_trendline
+    note = None
+    if use_trendline:
+        groups = (
+            [pair_data]
+            if color_column is None
+            else [group for _, group in pair_data.groupby(color_column, dropna=False)]
+        )
+        if any(len(group) < 2 or group[x_column].nunique() < 2 for group in groups):
+            use_trendline = False
+            note = (
+                "A linear trendline needs at least two finite observations with distinct X values "
+                "in each color group."
+            )
+
+    def build(trendline):
+        return px.scatter(
+            pair_data,
+            x=x_column,
+            y=y_column,
+            color=color_column,
+            trendline=trendline,
+            title=f"{x_column} vs. {y_column}",
+            labels={x_column: x_column, y_column: y_column},
+            hover_data=list(pair_data.columns),
+        )
+
+    try:
+        figure = build("ols" if use_trendline else None)
+    except (ValueError, np.linalg.LinAlgError):
+        if not use_trendline:
+            raise
+        figure = build(None)
+        note = "The linear trendline could not be calculated; the scatter plot is shown without it."
+    return figure, note
 
 
 def render(dataframe):
@@ -42,7 +82,16 @@ def render(dataframe):
         if numeric_summary.empty:
             st.caption("Select at least one numeric field to display its statistics.")
         else:
-            st.dataframe(numeric_summary, use_container_width=True)
+            count_columns = ["Count", "Missing Count", "Non-finite Count"]
+            statistic_columns = [
+                "Mean", "Standard Deviation", "Minimum", "25%", "Median", "75%", "Maximum"
+            ]
+            formatting = {column: "{:,.0f}" for column in count_columns}
+            formatting.update({column: "{:,.3f}" for column in statistic_columns})
+            st.dataframe(
+                numeric_summary.style.format(formatting, na_rep="NA"),
+                use_container_width=True,
+            )
     else:
         st.info("No numeric fields are available for descriptive statistics.")
 
@@ -130,13 +179,11 @@ def render(dataframe):
                 if pair_data.empty:
                     st.info("No complete observations remain after applying the selected color field.")
                 else:
-                    fig = px.scatter(
-                        pair_data, x=x_column, y=y_column, color=color_column,
-                        trendline="ols" if add_trendline else None,
-                        title=f"{x_column} vs. {y_column}",
-                        labels={x_column: x_column, y_column: y_column},
-                        hover_data=list(pair_data.columns),
+                    fig, trendline_note = _build_numeric_scatter(
+                        pair_data, x_column, y_column, color_column, add_trendline
                     )
+                    if trendline_note:
+                        st.warning(trendline_note)
                     st.plotly_chart(fig, use_container_width=True)
         elif x_is_numeric != y_is_numeric:
             category_column = y_column if x_is_numeric else x_column
@@ -188,8 +235,8 @@ def render(dataframe):
             "Correlation method", ["Pearson", "Spearman"], key="eda_correlation_method"
         )
         st.caption(
-            "Pandas computes each pair using pairwise complete observations; rows with a missing "
-            "value in either field are excluded only for that pair."
+            "Each pair uses pairwise finite observations. NaN and ±inf are excluded only for pairs "
+            "containing those values."
         )
         if len(selected_correlation_columns) < 2:
             st.info("Select at least two numeric fields to display a correlation matrix.")

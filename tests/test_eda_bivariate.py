@@ -1,5 +1,9 @@
 import pandas as pd
 import pytest
+import numpy as np
+import plotly.express as px
+import statsmodels.api as sm
+from unittest.mock import patch
 
 from user_analytics.analysis.eda import (
     calculate_correlation,
@@ -7,6 +11,7 @@ from user_analytics.analysis.eda import (
     prepare_categorical_crosstab,
     prepare_categorical_numeric_data,
 )
+from user_analytics.ui.pages.eda import _build_numeric_scatter
 
 
 def test_numeric_bivariate_data_drops_only_pairwise_missing_rows():
@@ -85,3 +90,121 @@ def test_same_field_is_rejected_for_bivariate_data():
 
     with pytest.raises(ValueError, match="different"):
         prepare_bivariate_data(dataframe, "x", "x")
+
+
+def test_numeric_bivariate_data_excludes_non_finite_pairs():
+    dataframe = pd.DataFrame({
+        "x": [1.0, 2.0, 3.0, float("inf"), 5.0, None],
+        "y": [2.0, 4.0, 6.0, 8.0, -float("inf"), 12.0],
+        "group": ["a", "b", "c", "d", "e", "f"],
+    })
+    original = dataframe.copy(deep=True)
+
+    pair = prepare_bivariate_data(dataframe, "x", "y")
+    correlation = calculate_correlation(dataframe, columns=["x", "y"])
+
+    assert pair.to_dict("records") == [
+        {"x": 1.0, "y": 2.0}, {"x": 2.0, "y": 4.0}, {"x": 3.0, "y": 6.0}
+    ]
+    assert correlation.loc["x", "y"] == pytest.approx(1)
+    pd.testing.assert_frame_equal(dataframe, original)
+
+
+def test_category_numeric_data_excludes_non_finite_numbers_only():
+    dataframe = pd.DataFrame({"group": ["a", "b", "c", "inf"], "score": [1.0, float("inf"), 3.0, -float("inf")]})
+
+    result = prepare_categorical_numeric_data(dataframe, "group", "score")
+
+    assert result.to_dict("records") == [{"group": "a", "score": 1.0}, {"group": "c", "score": 3.0}]
+
+
+def test_ols_scatter_builds_plotly_trendline_and_regular_scatter():
+    dataframe = pd.DataFrame({"x": [0.0, 1.0, 2.0, 3.0], "y": [1.0, 3.0, 5.0, 7.0]})
+
+    trendline_figure, trendline_note = _build_numeric_scatter(
+        dataframe, "x", "y", None, add_trendline=True
+    )
+    regular_figure, regular_note = _build_numeric_scatter(
+        dataframe, "x", "y", None, add_trendline=False
+    )
+
+    assert callable(sm.OLS)
+    assert trendline_note is None
+    assert len(px.get_trendline_results(trendline_figure)) == 1
+    assert regular_note is None
+    assert len(px.get_trendline_results(regular_figure)) == 0
+
+
+def test_ols_scatter_uses_pairwise_finite_data():
+    dataframe = pd.DataFrame({
+        "x": [0.0, 1.0, 2.0, float("inf"), 4.0, None],
+        "y": [1.0, 3.0, 5.0, 7.0, -float("inf"), 11.0],
+    })
+    pair_data = prepare_bivariate_data(dataframe, "x", "y")
+
+    figure, note = _build_numeric_scatter(pair_data, "x", "y", None, add_trendline=True)
+
+    assert len(pair_data) == 3
+    assert note is None
+    assert len(px.get_trendline_results(figure)) == 1
+
+
+def test_ols_scatter_with_insufficient_data_falls_back_without_page_error():
+    dataframe = pd.DataFrame({"x": [1.0], "y": [2.0]})
+
+    figure, note = _build_numeric_scatter(dataframe, "x", "y", None, add_trendline=True)
+
+    assert note is not None
+    assert "at least two finite observations" in note
+    assert len(figure.data) == 1
+    assert len(px.get_trendline_results(figure)) == 0
+
+
+def test_ols_scatter_checks_sample_sufficiency_within_color_groups():
+    dataframe = pd.DataFrame({
+        "x": [0.0, 1.0, 2.0, 3.0],
+        "y": [1.0, 3.0, 5.0, 7.0],
+        "group": ["single", "other", "other", "other"],
+    })
+
+    figure, note = _build_numeric_scatter(
+        dataframe, "x", "y", "group", add_trendline=True
+    )
+
+    assert note is not None
+    assert "each color group" in note
+    assert len(px.get_trendline_results(figure)) == 0
+
+
+@pytest.mark.parametrize(
+    "fit_error",
+    [ValueError("OLS input could not be fitted."), np.linalg.LinAlgError("Singular fit.")],
+)
+def test_ols_expected_fit_errors_fall_back_to_regular_scatter(fit_error):
+    dataframe = pd.DataFrame({"x": [0.0, 1.0, 2.0], "y": [1.0, 3.0, 5.0]})
+    plotly_scatter = px.scatter
+
+    def scatter_with_failing_ols(*args, **kwargs):
+        if kwargs.get("trendline") == "ols":
+            raise fit_error
+        return plotly_scatter(*args, **kwargs)
+
+    with patch("user_analytics.ui.pages.eda.px.scatter", side_effect=scatter_with_failing_ols):
+        figure, note = _build_numeric_scatter(
+            dataframe, "x", "y", None, add_trendline=True
+        )
+
+    assert note == "The linear trendline could not be calculated; the scatter plot is shown without it."
+    assert len(figure.data) == 1
+    assert len(px.get_trendline_results(figure)) == 0
+
+
+def test_ols_unexpected_scatter_error_is_not_silently_swallowed():
+    dataframe = pd.DataFrame({"x": [0.0, 1.0, 2.0], "y": [1.0, 3.0, 5.0]})
+
+    with patch(
+        "user_analytics.ui.pages.eda.px.scatter",
+        side_effect=RuntimeError("Unexpected Plotly programming error."),
+    ):
+        with pytest.raises(RuntimeError, match="Unexpected Plotly programming error"):
+            _build_numeric_scatter(dataframe, "x", "y", None, add_trendline=True)

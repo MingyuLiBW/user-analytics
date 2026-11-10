@@ -27,7 +27,7 @@
 | 默认本地地址 | `http://localhost:8501`；这是 Streamlit 默认地址，本次未检查正在运行的服务。端口被占用时 Streamlit 可能选用其他端口 |
 | 测试命令 | `python -m pytest -q` |
 
-已检查虚拟环境中的版本：Streamlit 1.65.0、Pandas 2.3.3、NumPy 2.2.6、scikit-learn 1.7.2、Plotly 7.1.0、pytest 9.2.0。以上是当前环境快照，不是依赖锁定版本。
+已检查虚拟环境中的版本：Streamlit 1.65.0、Pandas 2.3.3、NumPy 2.2.6、scikit-learn 1.7.2、Plotly 7.1.0、SciPy 1.15.3、statsmodels 0.14.6、pytest 9.2.0。以上是当前环境快照，不是依赖锁定版本。
 
 **待确认：** 本机 `py -3.10 --version` 返回 `No installed Python found!`，但全局 Python 3.10.6 的解释器绝对路径可以直接运行。项目日常操作建议继续使用 `.venv\Scripts\python.exe`，之后如需依赖 Python Launcher，再检查其注册配置。
 
@@ -128,28 +128,33 @@ User_Analytics/
 - Duplicate Rows：按完整重复行统计，不自动删除。
 - Data Type Classification：展示 Pandas dtype，并按数值、类别、日期时间或其他类型分类。
 - IQR Outlier Detection：用 1.5 × IQR 标记潜在异常，不修改或删除记录。
+- 数值 IQR 只使用有限值；NaN 和正负无穷分别计入缺失值和非有限值计数。
 - 主要代码：`src/user_analytics/analysis/profiling.py`、`src/user_analytics/analysis/outliers.py`、`src/user_analytics/ui/pages/data_quality.py`。
 - 主要测试：`tests/test_data_quality.py`。
 
 ### EDA
 
-- Descriptive Statistics：数值变量和类别变量分别汇总。
-- Numeric Univariate Analysis：数值直方图、箱线图。
-- Categorical Univariate Analysis：频数柱状图、占比和 Top N / Other。
-- Numeric-Numeric Analysis：散点图、可选线性趋势线和类别着色。
+- Descriptive Statistics：数值变量只使用有限值，Count、Missing Count、Non-finite Count 分别报告；类别变量单独汇总。
+- Numeric Univariate Analysis：数值直方图和箱线图排除 NaN 与正负无穷。
+- Categorical Univariate Analysis：频数柱状图、占比和 Top N / Other；尾部汇总标签避免覆盖真实 Other 类别。
+- Numeric-Numeric Analysis：散点图排除非有限观测，支持 Plotly Express OLS 趋势线和类别着色；趋势线数据不足时回退到普通散点图并提示。
 - Categorical-Numeric Analysis：箱线图或小提琴图。
 - Categorical-Categorical Analysis：频数或比例分组图。
-- Correlation Matrix：Pearson / Spearman 数值相关矩阵及热力图；布尔字段排除，缺失值使用成对有效观测策略。
+- Correlation Matrix：Pearson / Spearman 数值相关矩阵及热力图；布尔字段排除，使用成对有限观测。
+- OLS 趋势线使用的 statsmodels 已作为运行时依赖在 `pyproject.toml` 声明，约束为 `>=0.14,<0.15`。
 - 主要代码：`src/user_analytics/analysis/eda.py`、`src/user_analytics/ui/pages/eda.py`。
 - 主要测试：`tests/test_eda.py`、`tests/test_eda_bivariate.py`。
 
 ### Customer Segmentation
 
 - Numeric/Categorical Preprocessing：特征选择、日期和布尔字段排除、缺失值填补、类别 One-Hot Encoding、数值 StandardScaler。
+- 数值聚类特征若含 +inf / -inf，会在预处理阶段按字段和数量明确拒绝；NaN 继续按原策略填补。
 - Missing Value Imputation：数值字段使用中位数；类别字段使用众数，全缺失类别列使用占位值 `**MISSING**`。
 - StandardScaler 只用于数值特征；OneHotEncoder 未再次标准化，并配置未知类别安全处理。
 - K-means Clustering：固定 `n_init` 和用户提供的 `random_state`，返回模型结果、标签、中心和 inertia。
-- Elbow Method、Silhouette Score：在用户选择的 K 范围评估并展示；不声称单一绝对最优 K。
+- `summarize_clusters()` 对 Series 标签要求索引唯一且完整匹配；允许索引顺序不同并按索引对齐，数组标签按位置匹配并校验长度。
+- 数值 Cluster Profile 仅使用有限观测，并分别报告缺失数和非有限数；类别画像保持原有口径。
+- Elbow Method、多 K Silhouette Score：在用户选择的 K 范围评估并展示；不声称单一绝对最优 K。当前聚类 K 的 Silhouette 复用当前 KMeans 标签和预处理矩阵，不重复拟合。
 - PCA Visualization：对已预处理特征矩阵投影到二维，仅用于可视化，不改变 K-means 标签。
 - Cluster Profile：从原始字段汇总各簇数值统计和类别组成。
 - ANOVA、Levene Test、Kruskal-Wallis Test、Chi-square Test、Eta-squared、Epsilon-squared、Cramér's V 和 Benjamini-Hochberg FDR Correction：后端提供探索性聚类间比较和效应量；UI 分表展示主检验结果与诊断/效应量。
@@ -165,22 +170,27 @@ User_Analytics/
 - **统计结果缓存：** Statistical Analysis 结果绑定数据指纹、聚类字段、K、random state 和统计字段；签名不匹配时不展示旧结果。统计检验调用已有聚类标签，不重新训练模型。
 - **索引对齐：** `fit_kmeans()` 的聚类标签为以原始样本 index 为索引的 Series。画像、聚类汇总、PCA 和统计分析对 Series labels 按 index 对齐；统计后端对 Series 要求标签 index 与 DataFrame index 唯一且完全匹配。array-like labels 则按行位置对应。
 - **预处理：** `prepare_clustering_data()` 产出预处理后的特征和元数据；数值缺失以中位数填补并标准化，类别缺失以众数或占位类别填补并 One-Hot 编码。PCA 接收预处理后的特征，不重新从原始数据构造输入。
+- **非有限数值：** 数值统计、IQR、EDA 图表/相关分析和数值 Cluster Profile 只使用有限值，并将 NaN 与 ±inf 分别计数；分类字段保持原有分类规则。聚类数值输入遇到 ±inf 时拒绝，NaN 仍填补。
+- **OLS 趋势线：** Plotly Express 使用 `trendline="ols"`；`statsmodels>=0.14,<0.15` 是运行时依赖。趋势线按有限观测和颜色分组校验样本条件，计算失败时保留普通散点图并提示。
+- **当前 K 的 Silhouette：** 使用本次 `fit_kmeans()` 已生成的标签和同一预处理特征矩阵评分；Elbow 和多 K 评估仍由 `evaluate_kmeans()` 分别拟合候选 K。
 - **统计检验限制：** ANOVA、Levene、Kruskal-Wallis、Chi-square 等是当前数据上的探索性比较。若用于构造 K-means 的同一批特征又参与检验，P-value 不是独立确认性推断。Levene 是方差齐性诊断，不替换普通 ANOVA；卡方结果需结合期望频数警告。效应量与 P-value 提供不同信息，不应自动转成业务结论。
 - **源数据保护：** 当前分析逻辑以副本/派生结果进行计算；异常值和缺失值分析不自动删除源数据记录。
 
 ## 6. Git 状态和提交历史
 
-以下信息在记录 `e51c18f` 提交后核对：
+以下信息在 `1cd2473` 提交后及本轮审查期间核对：
 
 - **当前分支：** `feature/customer-segmentation`
-- **工作区状态：** 本轮更新本文档前，`git status` 显示工作区干净。本文档修改后会成为唯一的未提交修改；本轮没有修改代码或 Git 历史。
+- **HEAD：** `1cd2473`（Improve dependency management and setup documentation）。
+- **工作区状态：** 本轮代码审查前已有 15 个未提交文件，本轮同步状态文档后再增加 `PROJECT_STATUS.md`；未暂存、未提交、未重置，也没有删除或清理任何工作区内容。
 - **本地分支：** `feature/customer-segmentation`、`feature/data-quality`、`feature/eda`、`master`。
 - **远端：** 本次 `git remote -v` 未输出 remote；是否计划配置 GitHub remote 待后续确认。
 
-最近 5 个提交（完整 hash）：
+近期提交记录（按时间倒序，完整 hash）：
 
 | Hash | Message |
 | --- | --- |
+| `1cd2473fb3f646e34e48dfa0c961e35e71331809` | Improve dependency management and setup documentation |
 | `e51c18feebb925fc3aeaff668e1e9062f5d72a4c` | Improve CSV upload reliability and validation |
 | `585ed958217b3761ac07e68b3b95114d76a5920a` | Add project development status documentation |
 | `92ae702c7c215da63edb0e8fe9d758cd5e3a4718` | Add cluster statistical analysis |
@@ -192,25 +202,27 @@ User_Analytics/
 - **测试框架：** pytest。
 - **CSV loader 定向测试：** 14 passed（2026-11-10，本轮重新运行）。
 - **项目 `.venv` 全量测试记录：** 106 passed（2026-11-10，先前运行 `.venv\Scripts\python.exe -m pytest -q`）。
+- **本轮完整回归测试：** 137 passed（2026-11-10，运行 `.venv\Scripts\python.exe -m pytest -q`）。
 - **上传状态与 Customer Segmentation UI 定向测试：** 17 passed（2026-11-10，先前只读审查期间运行 `tests/test_home_upload_state.py` 与 `tests/test_customer_segmentation_ui.py` 得到；不是本轮跨页面浏览器测试结果）。
 - **最近一次 `git diff --check`：** 通过（2026-11-10，本轮运行；Git 仅提示部分文件工作副本 LF 将规范化为 CRLF，无 whitespace 错误）。
+- **本轮依赖检查：** `.venv` 为 Python 3.10.6；statsmodels 0.14.6 符合 `pyproject.toml` 的 `>=0.14,<0.15` 约束；SciPy 1.15.3 及其余运行依赖均可导入。`python -m pip check` 输出 `No broken requirements found.`。
+- **本轮浏览器验证（用户报告）：** A1 Top N 真实 Other、A3 有限值统计及 B1 当前 K Silhouette 行为已由用户在浏览器验证；用户也报告 OLS 趋势线已验证。该记录是用户报告的手动浏览器验证，不计入 pytest 结果，也不是 Codex 本轮自动执行的浏览器测试。
 - **依赖管理临时环境验证（Codex 自动执行）：** 在项目目录外的 `C:\AI_Projects\_ua_dependency_check_20261110` 使用 Python 3.10.6 创建全新虚拟环境；`python -m pip install -e ".[test]"` 和 `python -m pip install -r requirements.txt` 均成功；`python -m pip check` 输出 `No broken requirements found.`；`user_analytics`、`scipy`、`streamlit`、`pandas`、`numpy`、`sklearn`、`plotly` 导入检查成功；`python -m pytest -q` 为 106 passed；`python -m streamlit run app.py` 成功启动于端口 8502，验证后已停止。项目原有 `.venv` 未被修改。
-- **自动化与手动验证区分：** CSV loader 14 passed、上传状态与 Customer Segmentation UI 17 passed 为此前 pytest 自动化记录；全量 106 passed 既有项目 `.venv` 记录，也在本轮临时环境中重新验证。Cross-page Integration Regression 为用户报告的手动浏览器验证，不是自动化测试结果。临时环境安装与启动验证也不代表跨页面浏览器测试。
+- **自动化与手动验证区分：** CSV loader 14 passed、上传状态与 Customer Segmentation UI 17 passed、全量 106 passed 均为此前自动化记录；本轮 pytest 全量结果为 137 passed。A1/A3/B1 和 OLS 的浏览器验证由用户报告，Cross-page Integration Regression 也是用户报告的手动浏览器验证；这些都不计入自动化测试数量。
 
 ## 8. 当前开发进度
 
-核心功能开发、CSV 上传可靠性改进和跨页面手动浏览器回归均已完成。CSV Upload 阶段记录在提交 `e51c18f`（Improve CSV upload reliability and validation）中，包含字段数量一致性校验、session state 清除/替换处理和 50 MB 上传限制。A → B → C 数据替换及 Data Quality、EDA、Customer Segmentation 跨页面一致性由用户报告验证通过。本轮完成依赖声明和安装文档修正，并在项目目录外的全新 Python 3.10 环境验证两种安装入口、依赖一致性、模块导入、全量 pytest 和 Streamlit 启动；项目原有 `.venv` 未修改。该依赖验证不属于新的跨页面浏览器回归。
+核心功能开发、CSV 上传可靠性、跨页面手动回归和本轮 A1/A2/A3/B1 及 OLS 趋势线改进均已完成。A1/A2/A3/B1 和 statsmodels 改动当前尚未提交；本轮全量测试为 137 passed，pip check 通过，用户报告相关浏览器验证通过。当前工作区保留所有未提交修改，等待统一审查和提交。
 
 ## 9. 下一步开发计划
 
 按优先级推进工程化收尾：
 
-1. 继续完善 README 和项目文档，使其与当前功能、配置及验证状态一致。
-2. 检查部署配置；SciPy 直接依赖及 pytest 测试 extra 已在 `pyproject.toml` 声明并通过全新环境安装验证。
-3. 补充必要的异常数据和边界条件测试，并修复检查中发现的问题。
-4. 准备部署所需配置；配置 GitHub remote 并上传 GitHub（待用户确认后执行）。
-5. 部署 Streamlit Community Cloud。
-6. 浏览器验证线上应用。
+1. 审查并统一提交当前已验证的未提交修改。
+2. 继续检查部署配置和 README / 项目文档的一致性。
+3. 准备部署所需配置；配置 GitHub remote 并上传 GitHub（待用户确认后执行）。
+4. 部署 Streamlit Community Cloud。
+5. 浏览器验证线上应用。
 
 ## 10. 开发约定
 

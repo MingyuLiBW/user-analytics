@@ -1,29 +1,44 @@
 """Outlier detection helpers."""
 
+import numpy as np
 import pandas as pd
 
 
 def analyze_outliers(dataframe, min_valid_values=2):
-    """Count IQR outliers in numeric columns without modifying the input."""
-    results = []
-    row_count = len(dataframe)
+    """Count IQR outliers from finite numeric values without changing input.
 
+    Missing values and positive/negative infinities are excluded from IQR
+    calculations and reported separately.
+    """
+    results = []
     for column in dataframe.columns:
         series = dataframe[column]
         if not pd.api.types.is_numeric_dtype(series):
             continue
 
-        values = series.dropna()
+        numeric_values = pd.to_numeric(series, errors="coerce")
+        numeric_array = numeric_values.to_numpy(dtype=float, na_value=np.nan)
+        finite_mask = np.isfinite(numeric_array)
+        values = numeric_values.iloc[finite_mask]
+        missing_count = int(series.isna().sum())
+        non_finite_count = int((series.notna().to_numpy() & ~finite_mask).sum())
         if len(values) < min_valid_values:
+            status = (
+                "No finite numeric values"
+                if values.empty
+                else "Insufficient finite numeric values"
+            )
             results.append(
                 {
                     "column": column,
                     "valid_values": len(values),
+                    "missing_count": missing_count,
+                    "non_finite_count": non_finite_count,
                     "lower_bound": None,
                     "upper_bound": None,
-                    "outlier_count": 0,
-                    "outlier_percentage": 0.0,
-                    "status": "Insufficient numeric values",
+                    "outlier_count": None,
+                    "outlier_percentage": None,
+                    "status": status,
                 }
             )
             continue
@@ -36,6 +51,8 @@ def analyze_outliers(dataframe, min_valid_values=2):
                 {
                     "column": column,
                     "valid_values": len(values),
+                    "missing_count": missing_count,
+                    "non_finite_count": non_finite_count,
                     "lower_bound": None if pd.isna(iqr) else q1,
                     "upper_bound": None if pd.isna(iqr) else q3,
                     "outlier_count": 0,
@@ -52,6 +69,8 @@ def analyze_outliers(dataframe, min_valid_values=2):
             {
                 "column": column,
                 "valid_values": len(values),
+                "missing_count": missing_count,
+                "non_finite_count": non_finite_count,
                 "lower_bound": lower_bound,
                 "upper_bound": upper_bound,
                 "outlier_count": outlier_count,
@@ -63,7 +82,8 @@ def analyze_outliers(dataframe, min_valid_values=2):
     return pd.DataFrame(
         results,
         columns=[
-            "column", "valid_values", "lower_bound", "upper_bound",
+            "column", "valid_values", "missing_count", "non_finite_count",
+            "lower_bound", "upper_bound",
             "outlier_count", "outlier_percentage", "status",
         ],
     )

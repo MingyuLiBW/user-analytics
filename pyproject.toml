@@ -15,6 +15,7 @@ dependencies = [
     "scikit-learn",
     "plotly",
     "scipy",
+    "statsmodels>=0.14,<0.15",
 ]
 
 [project.optional-dependencies]

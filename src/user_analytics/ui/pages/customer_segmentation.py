@@ -5,6 +5,7 @@ import hashlib
 import pandas as pd
 import plotly.express as px
 import streamlit as st
+from sklearn.metrics import silhouette_score
 
 from user_analytics.analysis.clustering import (
     evaluate_kmeans,
@@ -65,11 +66,18 @@ def make_result_payload(source, selected_columns, n_clusters, random_state):
     )
     silhouette = None
     silhouette_note = None
-    try:
-        evaluation = evaluate_kmeans(prepared, [n_clusters], random_state=random_state)
-        silhouette = float(evaluation.loc[0, "Silhouette Score"])
-    except (ValueError, TypeError) as error:
-        silhouette_note = str(error)
+    observed_clusters = len(pd.unique(fitted.labels))
+    if observed_clusters < 2 or observed_clusters >= len(prepared.features):
+        silhouette_note = (
+            "Silhouette score requires between 2 and n_samples - 1 distinct fitted clusters."
+        )
+    else:
+        try:
+            silhouette = float(
+                silhouette_score(prepared.features.to_numpy(), fitted.labels.to_numpy())
+            )
+        except (ValueError, TypeError) as error:
+            silhouette_note = str(error)
     return {
         "labels": fitted.labels,
         "centers": fitted.centers,
@@ -486,7 +494,7 @@ def render(dataframe):
                     )
                     st.plotly_chart(fig, use_container_width=True)
                 else:
-                    st.caption("Selected numeric fields contain no non-missing values to compare.")
+                    st.caption("Selected numeric fields contain no finite values to compare.")
         with categorical_tab:
             if profiles.categorical.empty:
                 st.info("No categorical fields were selected for cluster profiling.")

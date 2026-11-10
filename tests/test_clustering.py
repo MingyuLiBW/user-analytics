@@ -83,3 +83,17 @@ def test_output_preserves_original_index_and_input_is_unchanged():
     assert result.features.index.tolist() == [10, 20, 30]
     assert result.sample_indices.tolist() == [10, 20, 30]
     pd.testing.assert_frame_equal(dataframe, original)
+
+
+@pytest.mark.parametrize("non_finite", [np.inf, -np.inf])
+def test_numeric_infinity_is_rejected_but_nan_imputation_remains_supported(non_finite):
+    dataframe = pd.DataFrame({"amount": [1.0, None, non_finite], "other": [2.0, 3.0, 4.0]})
+    original = dataframe.copy(deep=True)
+
+    with pytest.raises(ValueError, match="amount.*1 non-finite"):
+        prepare_clustering_data(dataframe, ["amount", "other"])
+    pd.testing.assert_frame_equal(dataframe, original)
+
+    finite_with_missing = dataframe.replace({"amount": {non_finite: 5.0}})
+    result = prepare_clustering_data(finite_with_missing, ["amount", "other"])
+    assert result.features.loc[1, "amount"] == pytest.approx(0)

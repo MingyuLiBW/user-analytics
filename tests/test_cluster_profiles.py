@@ -132,3 +132,48 @@ def test_invalid_fields_and_numeric_type_are_rejected_and_inputs_unchanged():
 
     pd.testing.assert_frame_equal(dataframe, original)
     pd.testing.assert_series_equal(labels, original_labels)
+
+
+def test_numeric_profiles_count_finite_missing_and_non_finite_per_cluster():
+    dataframe = pd.DataFrame(
+        {"score": [1.0, float("inf"), None, 10.0, -float("inf"), 30.0],
+         "kind": ["inf", "inf", None, "-inf", "x", "x"]},
+        index=[10, 20, 30, 40, 50, 60],
+    )
+    labels = pd.Series([0, 0, 0, 1, 1, 1], index=dataframe.index)
+    original = dataframe.copy(deep=True)
+    original_labels = labels.copy(deep=True)
+
+    result = summarize_cluster_profiles(
+        dataframe, labels, numeric_columns=["score"], categorical_columns=["kind"]
+    )
+    numeric = result.numeric.set_index("Cluster")
+
+    assert numeric.loc[0, "Count"] == 1
+    assert numeric.loc[0, "missing_count"] == 1
+    assert numeric.loc[0, "non_finite_count"] == 1
+    assert numeric.loc[0, "Mean"] == 1
+    assert numeric.loc[1, "Count"] == 2
+    assert numeric.loc[1, "missing_count"] == 0
+    assert numeric.loc[1, "non_finite_count"] == 1
+    assert numeric.loc[1, "Mean"] == 20
+    assert (numeric["Count"] + numeric["missing_count"] + numeric["non_finite_count"]).to_dict() == {
+        0: 3, 1: 3
+    }
+    assert set(result.categorical["Category"]) == {"inf", "-inf", "x"}
+    pd.testing.assert_frame_equal(dataframe, original)
+    pd.testing.assert_series_equal(labels, original_labels)
+
+
+def test_cluster_field_with_no_finite_values_has_zero_count_and_missing_statistics():
+    dataframe = pd.DataFrame({"score": [None, float("inf"), -float("inf")]}, index=[5, 15, 25])
+    labels = pd.Series([2, 2, 2], index=dataframe.index)
+
+    result = summarize_cluster_profiles(dataframe, labels, numeric_columns=["score"], categorical_columns=[])
+    row = result.numeric.iloc[0]
+
+    assert row["Count"] == 0
+    assert row["missing_count"] == 1
+    assert row["non_finite_count"] == 2
+    for field in ["Mean", "Median", "Standard Deviation", "Minimum", "Maximum"]:
+        assert pd.isna(row[field])
