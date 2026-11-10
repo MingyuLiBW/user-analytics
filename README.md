@@ -1,5 +1,8 @@
 # Interactive Customer Analytics Platform
 
+- **Live Demo:** [在线体验 Streamlit 应用](https://user-analytics-mingyu.streamlit.app/)
+- **GitHub Repository:** [查看项目源代码](https://github.com/MingyuLiBW/user-analytics)
+
 > An interactive Python application for data quality assessment, exploratory data analysis, customer segmentation, and statistical profiling.
 
 Interactive Customer Analytics Platform 是一个基于 Python 和 Streamlit 的 CSV 数据分析应用。用户可以上传 CSV，依次检查数据质量、探索字段分布与变量关系、使用 K-means 进行客户分群，并通过 PCA、Cluster Profile 和统计检验查看分群结果。
