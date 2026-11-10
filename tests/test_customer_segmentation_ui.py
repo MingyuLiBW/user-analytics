@@ -2,7 +2,11 @@ from unittest.mock import patch
 
 import pandas as pd
 
-from user_analytics.ui.pages.customer_segmentation import make_result_payload, render
+from user_analytics.ui.pages.customer_segmentation import (
+    make_result_payload,
+    render,
+    result_matches_current,
+)
 
 
 def test_customer_segmentation_page_shows_upload_prompt_without_data():
@@ -29,6 +33,7 @@ def test_display_payload_keeps_cluster_labels_aligned_to_original_index():
     assert payload["summary"]["Sample Count"].sum() == len(dataframe)
     assert payload["sample_count"] == 4
     assert payload["cluster_count"] == 2
+    assert payload["features"].index.tolist() == dataframe.index.tolist()
 
 
 def test_result_payload_surfaces_silhouette_unavailable_without_losing_fit():
@@ -47,3 +52,22 @@ def test_result_payload_surfaces_silhouette_unavailable_without_losing_fit():
     assert payload["inertia"] >= 0
     assert payload["silhouette"] is None
     assert "undefined" in payload["silhouette_note"]
+
+
+
+def test_result_match_requires_current_metadata_and_pca_inputs():
+    current = {
+        "dataset_fingerprint": "abc",
+        "selected_columns": ("spend", "visits"),
+        "n_clusters": 3,
+        "random_state": 42,
+        "features": pd.DataFrame({"PC-input-1": [0.0], "PC-input-2": [1.0]}),
+        "labels": pd.Series([0]),
+    }
+
+    assert result_matches_current(current, "abc", ["spend", "visits"], 3, 42)
+    assert not result_matches_current(
+        current, "abc", ["spend", "visits"], 2, 42
+    )
+    old_cached_result = {key: value for key, value in current.items() if key != "features"}
+    assert not result_matches_current(old_cached_result, "abc", ["spend", "visits"], 3, 42)

@@ -10,6 +10,7 @@ from user_analytics.analysis.clustering import (
     evaluate_kmeans,
     fit_kmeans,
     prepare_clustering_data,
+    prepare_pca_data,
     summarize_clusters,
 )
 
@@ -36,6 +37,19 @@ def available_feature_columns(dataframe):
         and not pd.api.types.is_datetime64_any_dtype(dataframe[column].dtype)
     ]
     return numeric_columns, categorical_columns
+
+
+def result_matches_current(result, fingerprint, selected_columns, n_clusters, random_state):
+    """Check cached clustering metadata and required PCA inputs against current controls."""
+    return bool(
+        result
+        and "features" in result
+        and "labels" in result
+        and result.get("dataset_fingerprint") == fingerprint
+        and result.get("selected_columns") == tuple(selected_columns)
+        and result.get("n_clusters") == int(n_clusters)
+        and result.get("random_state") == int(random_state)
+    )
 
 
 def make_result_payload(source, selected_columns, n_clusters, random_state):
@@ -65,6 +79,7 @@ def make_result_payload(source, selected_columns, n_clusters, random_state):
         "cluster_count": n_clusters,
         "feature_names": prepared.feature_names,
         "sample_indices": prepared.sample_indices,
+        "features": prepared.features.copy(),
     }
 
 
@@ -139,15 +154,16 @@ def render(dataframe):
                 st.session_state[result_state_key] = payload
 
     result = st.session_state.get(result_state_key)
-    result_matches = bool(
-        result
-        and result["dataset_fingerprint"] == current_fingerprint
-        and result["selected_columns"] == tuple(selected_columns)
-        and result["n_clusters"] == int(k_value)
-        and result["random_state"] == int(random_state)
+    result_matches = result_matches_current(
+        result, current_fingerprint, selected_columns, k_value, random_state
     )
     if result and not result_matches:
-        st.info("Clustering settings changed. Run clustering again to refresh these results.")
+        if "features" not in result or "labels" not in result:
+            st.session_state.pop(result_state_key, None)
+            result = None
+            st.info("Saved clustering results are outdated. Run clustering again to generate PCA inputs.")
+        else:
+            st.info("Clustering settings changed. Run clustering again to refresh these results.")
 
     st.header("Model Evaluation")
     if len(selected_columns) < 2:
@@ -211,6 +227,8 @@ def render(dataframe):
     st.header("Clustering Results")
     if not result_matches:
         st.info("Run clustering to view cluster assignments and profiles.")
+        st.subheader("PCA Visualization")
+        st.info("PCA will be available after a successful clustering run with at least two transformed features.")
         return
 
     metric_columns = st.columns(4)
@@ -229,3 +247,58 @@ def render(dataframe):
     st.subheader("Cluster centers (preprocessed feature space)")
     st.dataframe(result["centers"], use_container_width=True)
     st.caption("Cluster IDs are aligned to the original row index. Source records are not changed or removed.")
+
+    st.subheader("PCA Visualization")
+    pca_state_key = "customer_segmentation_pca"
+    pca_signature = (
+        current_fingerprint,
+        tuple(selected_columns),
+        int(k_value),
+        int(random_state),
+    )
+    pca_result = st.session_state.get(pca_state_key)
+    if not pca_result or pca_result["signature"] != pca_signature:
+        try:
+            pca_result = {
+                "signature": pca_signature,
+                "data": prepare_pca_data(result["features"], result["labels"]),
+            }
+            st.session_state[pca_state_key] = pca_result
+        except (ValueError, TypeError) as error:
+            st.session_state.pop(pca_state_key, None)
+            st.info(f"PCA visualization is unavailable: {error}")
+        except Exception as error:
+            st.session_state.pop(pca_state_key, None)
+            st.info(f"PCA visualization could not be generated: {error}")
+    if pca_result and pca_result["signature"] == pca_signature:
+        pca = pca_result["data"]
+        coordinates = pca.coordinates
+        variance_1 = pca.pc1_explained_variance_ratio
+        variance_2 = pca.pc2_explained_variance_ratio
+        fig = px.scatter(
+            coordinates,
+            x="PC1",
+            y="PC2",
+            color=coordinates["Cluster"].astype(str),
+            hover_data={
+                "Sample Index": True,
+                "Cluster": True,
+                "PC1": ":.4f",
+                "PC2": ":.4f",
+            },
+            title="Customer Segments — PCA Projection",
+            labels={
+                "PC1": f"PC1 ({variance_1:.1%} explained variance)",
+                "PC2": f"PC2 ({variance_2:.1%} explained variance)",
+                "color": "Cluster",
+            },
+        )
+        st.plotly_chart(fig, use_container_width=True)
+        variance_columns = st.columns(3)
+        variance_columns[0].metric("PC1 explained variance", f"{variance_1:.2%}")
+        variance_columns[1].metric("PC2 explained variance", f"{variance_2:.2%}")
+        variance_columns[2].metric(
+            "Cumulative explained variance",
+            f"{pca.cumulative_explained_variance_ratio:.2%}",
+        )
+        st.caption("PCA is used only to visualize the fitted clusters; it does not change K-means assignments.")
