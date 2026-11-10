@@ -3,8 +3,11 @@ from unittest.mock import patch
 import pandas as pd
 
 from user_analytics.ui.pages.customer_segmentation import (
+    build_cluster_statistics_tables,
     build_cluster_profile_tables,
     make_result_payload,
+    prepare_categorical_statistical_tables,
+    prepare_numeric_statistical_tables,
     render,
     result_matches_current,
 )
@@ -117,3 +120,106 @@ def test_stale_or_invalid_result_is_not_eligible_for_profile_display():
     assert not result_matches_current(
         stale_result, "current-data", ["spend", "tier"], 2, 42
     )
+
+
+def test_statistical_analysis_helper_reuses_original_data_and_aligned_labels():
+    dataframe = pd.DataFrame(
+        {
+            "spend": [10.0, 20.0, 30.0, 40.0],
+            "tier": ["A", "A", "B", "B"],
+        },
+        index=[11, 21, 31, 41],
+    )
+    original = dataframe.copy(deep=True)
+    labels = pd.Series([0, 0, 1, 1], index=dataframe.index)
+
+    result = build_cluster_statistics_tables(
+        dataframe,
+        labels.iloc[::-1],
+        numeric_columns=["spend"],
+        categorical_columns=["tier"],
+    )
+
+    assert set(result.numeric["Variable"]) == {"spend"}
+    assert result.numeric.loc[0, "Sample Count"] == 4
+    assert result.numeric.loc[0, "ANOVA Status"] == "OK"
+    assert set(result.categorical["Variable"]) == {"tier"}
+    assert result.categorical.loc[0, "Sample Count"] == 4
+    assert result.categorical.loc[0, "Status"] == "OK"
+    pd.testing.assert_frame_equal(dataframe, original)
+
+
+def test_numeric_statistical_tables_split_results_and_preserve_small_p_values_and_reasons():
+    results = pd.DataFrame(
+        {
+            "Variable": ["spend", "visits"],
+            "Sample Count": [20, 18],
+            "Cluster Count": [2, 2],
+            "ANOVA Statistic": [12.34567, None],
+            "ANOVA P-value": [1e-320, None],
+            "ANOVA Adjusted P-value": [0.0, None],
+            "Kruskal Statistic": [10.2, None],
+            "Kruskal P-value": [0.0012, None],
+            "Kruskal Adjusted P-value": [0.0024, None],
+            "Levene Statistic": [1.1, None],
+            "Levene P-value": [0.2, None],
+            "Variance Homogeneity Status": ["No significant evidence of unequal variances", "Unavailable"],
+            "Eta-squared": [0.45678, None],
+            "Epsilon-squared": [0.32123, None],
+            "Non-finite Count": [1, 0],
+            "ANOVA Status": ["OK", "Unavailable"],
+            "ANOVA Reason": [None, "Each cluster needs two observations."],
+            "Kruskal Status": ["OK", "Unavailable"],
+            "Kruskal Reason": [None, "Insufficient observations."],
+            "Levene Reason": [None, "At least two clusters are required."],
+        }
+    )
+
+    main, diagnostics = prepare_numeric_statistical_tables(results)
+
+    assert main.columns.tolist() == [
+        "Variable", "Sample Count", "Cluster Count", "ANOVA F", "ANOVA P-value",
+        "ANOVA P-value (FDR)", "Kruskal-Wallis H", "Kruskal-Wallis P-value",
+        "Kruskal-Wallis P-value (FDR)",
+    ]
+    assert main.loc[0, "ANOVA P-value"] == "1.000e-320"
+    assert main.loc[0, "ANOVA P-value (FDR)"] == "<1e-300"
+    assert "ANOVA Status" not in diagnostics
+    assert diagnostics.loc[0, "Eta-squared"] == "0.457"
+    assert diagnostics.loc[1, "Test Status / Reason"].find("Each cluster needs two observations.") >= 0
+    assert diagnostics.loc[1, "Test Status / Reason"].find("Insufficient observations.") >= 0
+    assert diagnostics.loc[1, "Test Status / Reason"].find("At least two clusters are required.") >= 0
+
+
+def test_categorical_statistical_tables_keep_warnings_and_unavailable_reasons():
+    results = pd.DataFrame(
+        {
+            "Variable": ["tier", "region"],
+            "Sample Count": [40, 5],
+            "Cluster Count": [2, 1],
+            "Category Count": [3, 2],
+            "Chi-square Statistic": [8.1234, None],
+            "Degrees of Freedom": [2, None],
+            "P-value": [0.0000123, None],
+            "Adjusted P-value": [0.0000246, None],
+            "Cramer's V": [0.31876, None],
+            "Minimum Expected Frequency": [1.25, None],
+            "Expected Cells < 5 Proportion": [0.4, None],
+            "Status": ["OK", "Unavailable"],
+            "Reason": [None, "At least two clusters must have valid values."],
+            "Warning": ["Expected counts are small.", None],
+        }
+    )
+
+    main, diagnostics = prepare_categorical_statistical_tables(results)
+
+    assert main.columns.tolist() == [
+        "Variable", "Sample Count", "Cluster Count", "Category Count",
+        "Chi-square Statistic", "Degrees of Freedom", "P-value", "P-value (FDR)",
+    ]
+    assert main.loc[0, "P-value"] == "1.230e-05"
+    assert diagnostics.loc[0, "Cramer's V"] == "0.319"
+    assert diagnostics.loc[0, "Expected Cells < 5 Proportion"] == "40.0%"
+    assert diagnostics.loc[0, "Expected Frequency Warning"] == "Expected counts are small."
+    assert "Unavailable" in diagnostics.loc[1, "Test Status / Reason"]
+    assert "At least two clusters" in diagnostics.loc[1, "Test Status / Reason"]

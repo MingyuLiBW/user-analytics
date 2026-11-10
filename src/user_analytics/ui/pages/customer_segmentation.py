@@ -14,6 +14,7 @@ from user_analytics.analysis.clustering import (
     summarize_cluster_profiles,
     summarize_clusters,
 )
+from user_analytics.analysis.cluster_statistics import analyze_cluster_statistics
 
 
 def dataset_fingerprint(dataframe):
@@ -118,6 +119,166 @@ def _format_numeric_profile(profile):
     return formatted
 
 
+def build_cluster_statistics_tables(dataframe, labels, numeric_columns, categorical_columns):
+    """Run backend tests against original rows and already-fitted cluster labels."""
+    return analyze_cluster_statistics(
+        dataframe,
+        labels,
+        numeric_columns=numeric_columns,
+        categorical_columns=categorical_columns,
+    )
+
+
+def _format_statistical_values(table, columns):
+    """Format finite statistic values for display while preserving unavailable values."""
+    formatted = table.copy()
+    for column in columns:
+        if column in formatted:
+            formatted[column] = formatted[column].map(
+                lambda value: f"{value:,.4g}" if pd.notna(value) else "—"
+            )
+    return formatted
+
+
+def _format_p_values(table, columns):
+    """Use scientific notation and never render a small P-value as zero."""
+    formatted = table.copy()
+    for column in columns:
+        if column in formatted:
+            formatted[column] = formatted[column].map(
+                lambda value: (
+                    "—" if pd.isna(value)
+                    else "<1e-300" if float(value) == 0
+                    else f"{float(value):.3e}"
+                )
+            )
+    return formatted
+
+
+def _format_effect_sizes(table, columns):
+    """Show effect sizes to three decimal places without inventing missing values."""
+    formatted = table.copy()
+    for column in columns:
+        if column in formatted:
+            formatted[column] = formatted[column].map(
+                lambda value: (
+                    "—" if pd.isna(value)
+                    else value if value == "—"
+                    else f"{float(value):.3f}"
+                )
+            )
+    return formatted
+
+
+def _numeric_status_reason(row):
+    """Summarize unavailable numeric tests and their backend-provided reasons."""
+    details = []
+    for test, status_column, reason_column in (
+        ("ANOVA", "ANOVA Status", "ANOVA Reason"),
+        ("Kruskal-Wallis", "Kruskal Status", "Kruskal Reason"),
+        ("Levene", "Variance Homogeneity Status", "Levene Reason"),
+    ):
+        status = row[status_column]
+        if status != "OK" and status != "No significant evidence of unequal variances" and status != "Potential heterogeneity":
+            reason = row[reason_column]
+            details.append(f"{test}: {status}" + (f" — {reason}" if pd.notna(reason) else ""))
+    return "; ".join(details)
+
+
+def prepare_numeric_statistical_tables(results):
+    """Build compact numeric main-results and diagnostics/effect-size tables."""
+    main = results[
+        [
+            "Variable", "Sample Count", "Cluster Count", "ANOVA Statistic",
+            "ANOVA P-value", "ANOVA Adjusted P-value", "Kruskal Statistic",
+            "Kruskal P-value", "Kruskal Adjusted P-value",
+        ]
+    ].rename(columns={
+        "ANOVA Statistic": "ANOVA F",
+        "ANOVA P-value": "ANOVA P-value",
+        "ANOVA Adjusted P-value": "ANOVA P-value (FDR)",
+        "Kruskal Statistic": "Kruskal-Wallis H",
+        "Kruskal P-value": "Kruskal-Wallis P-value",
+        "Kruskal Adjusted P-value": "Kruskal-Wallis P-value (FDR)",
+    })
+    main = _format_statistical_values(main, ["ANOVA F", "Kruskal-Wallis H"])
+    main = _format_p_values(
+        main, ["ANOVA P-value", "ANOVA P-value (FDR)", "Kruskal-Wallis P-value", "Kruskal-Wallis P-value (FDR)"]
+    )
+
+    diagnostics = results[
+        [
+            "Variable", "Levene Statistic", "Levene P-value", "Variance Homogeneity Status",
+            "Eta-squared", "Epsilon-squared", "Non-finite Count", "ANOVA Status",
+            "ANOVA Reason", "Kruskal Status", "Kruskal Reason", "Levene Reason",
+        ]
+    ].copy()
+    diagnostics = _format_statistical_values(
+        diagnostics,
+        ["Levene Statistic", "Eta-squared", "Epsilon-squared"],
+    )
+    diagnostics = _format_effect_sizes(diagnostics, ["Eta-squared", "Epsilon-squared"])
+    diagnostics = _format_p_values(diagnostics, ["Levene P-value"])
+    diagnostics["Test Status / Reason"] = results.apply(_numeric_status_reason, axis=1)
+    diagnostics = diagnostics.rename(columns={
+        "Variance Homogeneity Status": "Variance Homogeneity Status",
+    })
+    if diagnostics["Test Status / Reason"].eq("").all():
+        diagnostics = diagnostics.drop(
+            columns=["ANOVA Status", "ANOVA Reason", "Kruskal Status", "Kruskal Reason", "Levene Reason", "Test Status / Reason"]
+        )
+    else:
+        diagnostics = diagnostics.drop(
+            columns=["ANOVA Status", "ANOVA Reason", "Kruskal Status", "Kruskal Reason", "Levene Reason"]
+        )
+    return main, diagnostics
+
+
+def prepare_categorical_statistical_tables(results):
+    """Build compact categorical main-results and diagnostics tables."""
+    main = results[
+        [
+            "Variable", "Sample Count", "Cluster Count", "Category Count",
+            "Chi-square Statistic", "Degrees of Freedom", "P-value", "Adjusted P-value",
+        ]
+    ].rename(columns={
+        "Chi-square Statistic": "Chi-square Statistic",
+        "Adjusted P-value": "P-value (FDR)",
+    })
+    main = _format_statistical_values(main, ["Chi-square Statistic"])
+    main = _format_p_values(main, ["P-value", "P-value (FDR)"])
+
+    diagnostics = results[
+        [
+            "Variable", "Cramer's V", "Minimum Expected Frequency",
+            "Expected Cells < 5 Proportion", "Status", "Reason", "Warning",
+        ]
+    ].copy().rename(columns={
+        "Expected Cells < 5 Proportion": "Expected Cells < 5 Proportion",
+        "Warning": "Expected Frequency Warning",
+    })
+    diagnostics = _format_statistical_values(
+        diagnostics, ["Cramer's V", "Minimum Expected Frequency"]
+    )
+    diagnostics = _format_effect_sizes(diagnostics, ["Cramer's V"])
+    diagnostics["Expected Cells < 5 Proportion"] = diagnostics[
+        "Expected Cells < 5 Proportion"
+    ].map(lambda value: f"{value:.1%}" if pd.notna(value) else "—")
+    unavailable = results["Status"] != "OK"
+    if unavailable.any():
+        diagnostics["Test Status / Reason"] = results.apply(
+            lambda row: row["Status"] + (f" — {row['Reason']}" if pd.notna(row["Reason"]) else ""),
+            axis=1,
+        )
+        diagnostics = diagnostics.drop(columns=["Status", "Reason"])
+    else:
+        diagnostics = diagnostics.drop(columns=["Status", "Reason"])
+    diagnostics["Expected Frequency Warning"] = diagnostics["Expected Frequency Warning"].map(
+        lambda value: value if pd.notna(value) else "—"
+    )
+    return main, diagnostics
+
+
 def render_empty_state():
     """Show a friendly prompt when no dataset is available."""
     st.info("Upload a CSV file on the Home page to configure customer segmentation.")
@@ -155,6 +316,7 @@ def render(dataframe):
     if previous_fingerprint != current_fingerprint:
         st.session_state.pop(result_state_key, None)
         st.session_state.pop("customer_segmentation_evaluation", None)
+        st.session_state.pop("customer_segmentation_statistics", None)
         st.session_state.customer_segmentation_dataset = current_fingerprint
 
     with st.form("customer_segmentation_run_form"):
@@ -406,3 +568,116 @@ def render(dataframe):
             f"{pca.cumulative_explained_variance_ratio:.2%}",
         )
         st.caption("PCA is used only to visualize the fitted clusters; it does not change K-means assignments.")
+
+    st.header("Statistical Analysis")
+    st.caption(
+        "These are exploratory statistical comparisons. If variables were also used to construct the "
+        "K-means clusters, the tests are not independent confirmatory evidence. A small P-value does "
+        "not automatically imply practical importance; effect sizes provide complementary information. "
+        "Levene is a variance-homogeneity diagnostic and does not replace ordinary ANOVA. A significant "
+        "Levene result is shown as a warning and does not change the ANOVA method. Chi-square results "
+        "include expected-frequency diagnostics."
+    )
+    statistics_numeric_candidates, statistics_categorical_candidates = available_feature_columns(dataframe)
+    default_numeric = [column for column in selected_columns if column in statistics_numeric_candidates]
+    default_categorical = [column for column in selected_columns if column in statistics_categorical_candidates]
+    with st.form("customer_segmentation_statistics_form"):
+        statistics_numeric = st.multiselect(
+            "Numeric variables",
+            options=statistics_numeric_candidates,
+            default=default_numeric,
+            key="customer_segmentation_statistics_numeric",
+        )
+        statistics_categorical = st.multiselect(
+            "Categorical variables",
+            options=statistics_categorical_candidates,
+            default=default_categorical,
+            key="customer_segmentation_statistics_categorical",
+        )
+        run_statistics = st.form_submit_button("Run Statistical Analysis")
+
+    statistics_state_key = "customer_segmentation_statistics"
+    statistics_signature = (
+        current_fingerprint,
+        tuple(result["selected_columns"]),
+        result["n_clusters"],
+        result["random_state"],
+        tuple(statistics_numeric),
+        tuple(statistics_categorical),
+    )
+    if run_statistics:
+        if not statistics_numeric and not statistics_categorical:
+            st.session_state.pop(statistics_state_key, None)
+            st.info("Select at least one numeric or categorical variable for analysis.")
+        else:
+            try:
+                statistics = build_cluster_statistics_tables(
+                    dataframe,
+                    result["labels"],
+                    statistics_numeric,
+                    statistics_categorical,
+                )
+            except (ValueError, TypeError, KeyError):
+                st.session_state.pop(statistics_state_key, None)
+                st.error("Statistical analysis could not be calculated. Check the selected fields and data.")
+            except Exception:
+                st.session_state.pop(statistics_state_key, None)
+                st.error("Statistical analysis failed. Check the selected fields and try again.")
+            else:
+                st.session_state[statistics_state_key] = {
+                    "signature": statistics_signature,
+                    "result": statistics,
+                }
+
+    statistics_state = st.session_state.get(statistics_state_key)
+    if statistics_state and statistics_state.get("signature") == statistics_signature:
+        statistics = statistics_state["result"]
+        numeric_tab, categorical_tab = st.tabs(["Numerical Tests", "Categorical Tests"])
+        with numeric_tab:
+            if statistics.numeric.empty:
+                st.info("No numeric variables were selected for statistical tests.")
+            else:
+                st.subheader("Main Statistical Results")
+                numeric_main, numeric_diagnostics = prepare_numeric_statistical_tables(statistics.numeric)
+                st.dataframe(
+                    numeric_main,
+                    hide_index=True,
+                    use_container_width=True,
+                )
+                st.subheader("Diagnostics and Effect Sizes")
+                st.dataframe(numeric_diagnostics, hide_index=True, use_container_width=True)
+                heterogeneous = statistics.numeric[
+                    statistics.numeric["Variance Homogeneity Status"] == "Potential heterogeneity"
+                ]
+                for _, row in heterogeneous.iterrows():
+                    st.warning(
+                        f"{row['Variable']}: Levene indicates potential variance heterogeneity "
+                        "(ordinary ANOVA is still reported unchanged)."
+                    )
+                unavailable_levene = statistics.numeric[
+                    statistics.numeric["Variance Homogeneity Status"] == "Unavailable"
+                ]
+                for _, row in unavailable_levene.iterrows():
+                    if pd.notna(row["Levene Reason"]):
+                        st.caption(f"{row['Variable']} — Levene unavailable: {row['Levene Reason']}")
+
+        with categorical_tab:
+            if statistics.categorical.empty:
+                st.info("No categorical variables were selected for statistical tests.")
+            else:
+                st.subheader("Main Statistical Results")
+                categorical_main, categorical_diagnostics = prepare_categorical_statistical_tables(
+                    statistics.categorical
+                )
+                st.dataframe(
+                    categorical_main,
+                    hide_index=True,
+                    use_container_width=True,
+                )
+                st.subheader("Diagnostics and Effect Size")
+                st.dataframe(categorical_diagnostics, hide_index=True, use_container_width=True)
+                for _, row in statistics.categorical.iterrows():
+                    if pd.notna(row["Warning"]):
+                        st.warning(f"{row['Variable']}: {row['Warning']}")
+    elif statistics_state:
+        st.info("Saved statistical results are outdated. Run Statistical Analysis again for the current selections.")
