@@ -20,6 +20,7 @@
 | 全局 Python | Python 3.10.6；通过 `C:\Users\kevin\AppData\Local\Programs\Python\Python310\python.exe --version` 验证 |
 | 项目虚拟环境 | `.venv` |
 | 虚拟环境解释器 | `.venv\Scripts\python.exe`，版本 Python 3.10.6 |
+| 项目声明支持版本 | Python `>=3.10,<3.12`（Python 3.10、3.11） |
 | 项目布局 | `src` layout |
 | 项目安装方式 | `pyproject.toml` 配置 setuptools；虚拟环境安装元数据确认是 editable 安装，项目 URL 为本地项目目录 |
 | 依赖安装 | 推荐 `python -m pip install -e ".[test]"`；兼容入口为 `python -m pip install -r requirements.txt` |
@@ -206,13 +207,14 @@ User_Analytics/
 - **上传状态与 Customer Segmentation UI 定向测试：** 17 passed（2026-11-10，先前只读审查期间运行 `tests/test_home_upload_state.py` 与 `tests/test_customer_segmentation_ui.py` 得到；不是本轮跨页面浏览器测试结果）。
 - **最近一次 `git diff --check`：** 通过（2026-11-10，本轮运行；Git 仅提示部分文件工作副本 LF 将规范化为 CRLF，无 whitespace 错误）。
 - **本轮依赖检查：** `.venv` 为 Python 3.10.6；statsmodels 0.14.6 符合 `pyproject.toml` 的 `>=0.14,<0.15` 约束；SciPy 1.15.3 及其余运行依赖均可导入。`python -m pip check` 输出 `No broken requirements found.`。
+- **Python 3.11.5 兼容性验证（用户报告）：** 在独立副本 `C:\AI_Projects\User_Analytics_py311_test` 中使用 Python 3.11.5 验证；`python -m pip install -e ".[test]"` 成功，`python -m pytest -q` 为 140 passed，Streamlit 网页启动正常且主要页面功能正常。此结果来自独立验证副本，不代表在正式项目 `.venv` 中运行，也没有修改正式项目原有 Python 3.10 环境。
 - **本轮浏览器验证（用户报告）：** A1 Top N 真实 Other、A3 有限值统计及 B1 当前 K Silhouette 行为已由用户在浏览器验证；用户也报告 OLS 趋势线已验证。该记录是用户报告的手动浏览器验证，不计入 pytest 结果，也不是 Codex 本轮自动执行的浏览器测试。
 - **依赖管理临时环境验证（Codex 自动执行）：** 在项目目录外的 `C:\AI_Projects\_ua_dependency_check_20261110` 使用 Python 3.10.6 创建全新虚拟环境；`python -m pip install -e ".[test]"` 和 `python -m pip install -r requirements.txt` 均成功；`python -m pip check` 输出 `No broken requirements found.`；`user_analytics`、`scipy`、`streamlit`、`pandas`、`numpy`、`sklearn`、`plotly` 导入检查成功；`python -m pytest -q` 为 106 passed；`python -m streamlit run app.py` 成功启动于端口 8502，验证后已停止。项目原有 `.venv` 未被修改。
 - **自动化与手动验证区分：** CSV loader 14 passed、上传状态与 Customer Segmentation UI 17 passed、全量 106 passed 均为此前自动化记录；本轮 pytest 全量结果为 137 passed。A1/A3/B1 和 OLS 的浏览器验证由用户报告，Cross-page Integration Regression 也是用户报告的手动浏览器验证；这些都不计入自动化测试数量。
 
 ## 8. 当前开发进度
 
-核心功能开发、CSV 上传可靠性、跨页面手动回归和本轮 A1/A2/A3/B1 及 OLS 趋势线改进均已完成。A1/A2/A3/B1 和 statsmodels 改动当前尚未提交；本轮全量测试为 137 passed，pip check 通过，用户报告相关浏览器验证通过。当前工作区保留所有未提交修改，等待统一审查和提交。
+核心功能开发、CSV 上传可靠性、跨页面手动回归和 A1/A2/A3/B1 及 OLS 趋势线改进均已完成。项目现声明支持 Python 3.10 与 3.11；用户报告的 Python 3.11.5 独立副本验证中，依赖安装成功、140 项测试通过且主要页面运行正常。正式项目 `.venv` 仍为 Python 3.10.6。
 
 ## 9. 下一步开发计划
 

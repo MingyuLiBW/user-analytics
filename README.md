@@ -116,7 +116,7 @@ flowchart TD
 
 ## 技术栈
 
-- **语言与运行环境：** Python 3.10
+- **语言与运行环境：** Python 3.10、3.11
 - **Web 应用：** Streamlit
 - **数据处理：** Pandas、NumPy
 - **机器学习：** scikit-learn
@@ -128,10 +128,10 @@ flowchart TD
 
 ## 快速开始
 
-以下命令适用于 Windows PowerShell，请在项目根目录执行。项目要求 Python `>=3.10,<3.11`。
+以下命令适用于 Windows PowerShell，请在项目根目录执行。项目支持 Python `>=3.10,<3.12`（Python 3.10 或 3.11）。
 
 ```powershell
-# 创建 Python 3.10 虚拟环境
+# 创建 Python 3.10 虚拟环境；若使用 Python 3.11，请将此命令改为 py -3.11 -m venv .venv
 py -3.10 -m venv .venv
 
 # 激活虚拟环境
@@ -145,10 +145,10 @@ python -m pip install -e ".[test]"
 python -m streamlit run app.py
 ```
 
-如果 `py -3.10` 不可用，请将下面的示例路径替换为本机 Python 3.10 解释器的实际路径：
+如果相应的 `py -3.10` 或 `py -3.11` 命令不可用，请将下面的示例路径替换为本机所选解释器的实际路径。示例使用 Python 3.11；选择 Python 3.10 时，将路径中的 `Python311` 改为本机对应目录：
 
 ```powershell
-& "C:\Path\To\Python310\python.exe" -m venv .venv
+& "C:\Path\To\Python311\python.exe" -m venv .venv
 ```
 
 Streamlit 启动后通常可通过 <http://localhost:8501> 访问，并会持续占用当前终端。运行测试时可另开 PowerShell 窗口并激活 `.venv`，或按 `Ctrl+C` 停止应用后执行：
