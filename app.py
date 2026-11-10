@@ -4,14 +4,14 @@ import streamlit as st
 
 from user_analytics.config import APP_ICON, APP_TITLE, PAGE_LAYOUT
 from user_analytics.data.loader import CSVLoadError, load_csv
-from user_analytics.ui.pages import data_quality
+from user_analytics.ui.pages import data_quality, eda
 
 st.set_page_config(page_title=APP_TITLE, page_icon=APP_ICON, layout=PAGE_LAYOUT)
 
 if "uploaded_dataframe" not in st.session_state:
     st.session_state.uploaded_dataframe = None
 
-page = st.sidebar.radio("Page", ["Home", "Data Quality"], key="dashboard_page")
+page = st.sidebar.radio("Page", ["Home", "Data Quality", "EDA"], key="dashboard_page")
 
 if page == "Home":
     st.title("📊 User Analytics Dashboard")
@@ -46,5 +46,7 @@ if page == "Home":
                 hide_index=True,
                 use_container_width=True,
             )
-else:
+elif page == "Data Quality":
     data_quality.render(st.session_state.uploaded_dataframe)
+else:
+    eda.render(st.session_state.uploaded_dataframe)
