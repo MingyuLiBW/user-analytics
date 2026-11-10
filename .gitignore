@@ -15,6 +15,7 @@ data/*.xls
 *.tsv
 *.xlsx
 *.xls
+.Rhistory
 
 # Python packaging metadata
 *.egg-info/
