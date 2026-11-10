@@ -104,3 +104,48 @@ def prepare_category_frequencies(dataframe, column, top_n=None):
     result = pd.DataFrame({"Category": counts.index, "Count": counts.to_numpy()})
     result["Percentage"] = result["Count"] / denominator * 100 if denominator else 0.0
     return result
+
+
+
+def prepare_bivariate_data(dataframe, x_column, y_column):
+    """Return a copy of pairwise-valid observations for two selected fields."""
+    if x_column == y_column:
+        raise ValueError("Choose different fields for X and Y.")
+    if x_column not in dataframe.columns or y_column not in dataframe.columns:
+        raise ValueError("Choose fields that exist in the dataset.")
+    return dataframe[[x_column, y_column]].dropna().copy()
+
+
+def prepare_categorical_numeric_data(dataframe, category_column, numeric_column):
+    """Return pairwise-valid category/numeric observations for grouped plots."""
+    if category_column == numeric_column:
+        raise ValueError("Choose different fields for X and Y.")
+    if category_column not in get_categorical_columns(dataframe):
+        raise ValueError(f"'{category_column}' is not a categorical field.")
+    if numeric_column not in get_numeric_columns(dataframe):
+        raise ValueError(f"'{numeric_column}' is not a numeric field.")
+    return dataframe[[category_column, numeric_column]].dropna().copy()
+
+
+def prepare_categorical_crosstab(dataframe, x_column, y_column, normalize=False):
+    """Return pairwise category counts or row-wise proportions."""
+    if x_column == y_column:
+        raise ValueError("Choose different fields for X and Y.")
+    categorical_columns = get_categorical_columns(dataframe)
+    if x_column not in categorical_columns or y_column not in categorical_columns:
+        raise ValueError("Both fields must be categorical.")
+    valid_pairs = dataframe[[x_column, y_column]].dropna()
+    return pd.crosstab(valid_pairs[x_column], valid_pairs[y_column], normalize="index" if normalize else False)
+
+
+def calculate_correlation(dataframe, columns=None, method="pearson"):
+    """Calculate Pearson or Spearman correlations on pairwise valid observations."""
+    if method not in {"pearson", "spearman"}:
+        raise ValueError("Correlation method must be 'pearson' or 'spearman'.")
+    numeric_columns = get_numeric_columns(dataframe)
+    selected = numeric_columns if columns is None else [
+        column for column in columns if column in numeric_columns
+    ]
+    if not selected:
+        return pd.DataFrame()
+    return dataframe[selected].corr(method=method, min_periods=1)
